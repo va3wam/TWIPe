@@ -1,6 +1,6 @@
 # TWIPe
 
-Two wheeled inverted pendulum robot built with embedded 
+Two wheeled inverted pendulum robot. Full details about this project can be found [here](https://github.com/va3wam/TWIPe/wiki).
 
 ## Getting Started
 
