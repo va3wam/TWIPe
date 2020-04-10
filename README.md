@@ -4,7 +4,7 @@ Two wheeled inverted pendulum robot built with embedded
 
 ## Getting Started
 
-To get a copy of this project up and running on your local machine for development and testing purposes please follow [https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control](these) instrutions. 
+To get a copy of this project up and running on your local machine for development and testing purposes please follow these [instructions](https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control).
 
 ### Prerequisites
 
