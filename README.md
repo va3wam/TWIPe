@@ -21,7 +21,7 @@ At the present time we have no testing strategy worked out.
 
 ## Deployment
 
-At this time the embedded code in this repository is uploaded via a serial connection using PLatformIO. 
+At this time the embedded code in this repository is uploaded via a serial connection using PlatformIO. 
 
 ## Built With
 
