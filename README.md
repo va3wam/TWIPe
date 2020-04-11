@@ -4,11 +4,11 @@ This project contains the embedded system code used for a Two Wheeled Inverted P
 
 ## Getting Started
 
-There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. You can find everythng that you need to set up a VA3WAM compatable  work space in your own environment there or by  following the instructins and links below.  
+There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. You can find everything that you need to set up a VA3WAM compatable  work space in your own environment there or by following the instructions and links below.  
 
 ### Prerequisites
 
-You need to set up the VA3WAM development environment documented [here](https://github.com/va3wam/va3wam.github.io/wiki/Tools).
+The VA3WAM development environment used to make the code in this repository is documented [here](https://github.com/va3wam/va3wam.github.io/wiki/Tools).
 
 
 ### Installing
@@ -21,7 +21,7 @@ At the present time we have no testing strategy worked out.
 
 ## Deployment
 
-Add additional notes about how to deploy this on a live system
+At this time the embedded code in this repository is uploaded via a serial connection using PLatformIO. 
 
 ## Built With
 
