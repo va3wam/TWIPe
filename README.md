@@ -1,10 +1,10 @@
 # TWIPe
 
-This project contains the embedded system code used for a Two Wheeled Inverted Pendulum robot. Full details about this project can be found [here](https://github.com/va3wam/TWIPe/wiki).
+This project contains the embedded system code used for a Two Wheeled Inverted Pendulum robot. 
 
 ## Getting Started
 
-There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. You can find everything that you need to set up a VA3WAM compatable  work space in your own environment there or by following the instructions and links below.  
+There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. Everything that you need to set up a VA3WAM compatable work space can be found in the wiki. Alternativey, you can follow the instructions and links below to set up your environment.  
 
 ### Prerequisites
 
