@@ -1,6 +1,6 @@
 # TWIPe
 
-Two wheeled inverted pendulum robot. Full details about this project can be found [here](https://github.com/va3wam/TWIPe/wiki).
+This project contains the embedded system code used for a Two Wheeled Inverted Pendulum robot. Full details about this project can be found [here](https://github.com/va3wam/TWIPe/wiki).
 
 ## Getting Started
 
@@ -13,41 +13,11 @@ You need to set up the VA3WAM development environment documented [here](https://
 
 ### Installing
 
-A step by step series of examples that tell you how to get a development env running
-
-Say what the step will be
-
-```
-Give the example
-```
-
-And repeat
-
-```
-until finished
-```
-
-End with an example of getting some data out of the system or using it for a little demo
+To get a copy of this project up and running on your local machine for development and testing purposes please follow these [instructions](https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control).
 
 ## Running the tests
 
-Explain how to run the automated tests for this system
-
-### Break down into end to end tests
-
-Explain what these tests test and why
-
-```
-Give an example
-```
-
-### And coding style tests
-
-Explain what these tests test and why
-
-```
-Give an example
-```
+AT the present time we have no testing strategy worked out.
 
 ## Deployment
 
@@ -55,9 +25,11 @@ Add additional notes about how to deploy this on a live system
 
 ## Built With
 
-* [Dropwizard](http://www.dropwizard.io/1.0.2/docs/) - The web framework used
-* [Maven](https://maven.apache.org/) - Dependency Management
-* [ROME](https://rometools.github.io/rome/) - Used to generate RSS Feeds
+* [Visual Studio Code](https://code.visualstudio.com/) - Enhanced text editor
+* [PlatformIO](https://platformio.org/) - Embedded programming IDE
+* [Sea Monkey](https://www.seamonkey-project.org/) - Internet Application Suite
+* [Mosquito](https://mosquitto.org/) - MQTT Broker
+* [MQTTfx](http://mqttfx.org/) - MQTT client
 
 ## Contributing
 
@@ -65,13 +37,14 @@ Please read [CONTRIBUTING.md](https://gist.github.com/PurpleBooth/b24679402957c6
 
 ## Versioning
 
-We use [SemVer](http://semver.org/) for versioning. For the versions available, see the [tags on this repository](https://github.com/your/project/tags). 
+We use [SemVer](http://semver.org/) for versioning. For the versions available, see the [tags on this repository](https://github.com/va3wam/TWIPe/tags).
 
 ## Authors
 
-* **Billie Thompson** - *Initial work* - [PurpleBooth](https://github.com/PurpleBooth)
+* **Doug Elliott** - *Initial work* 
+* **va3wam** - *Initial work* 
 
-See also the list of [contributors](https://github.com/your/project/contributors) who participated in this project.
+See also the list of [contributors](https://github.com/va3wam/TWIPe/contributors) who participated in this project.
 
 ## License
 
@@ -79,8 +52,8 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 
 ## Acknowledgments
 
-* Hat tip to anyone whose code was used
-* Inspiration
-* etc
-
+* Joop Brokking and his [Balancing Robot](http://www.brokking.net/yabr_main.html)
+* Tony DiCola and Adafruit Industries for their MQTT QOS1 library
+* Jeff Rowberg for the MPU6050 DMP logic
+* Daniel Eichhorn for OLED library
 
