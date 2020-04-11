@@ -4,7 +4,7 @@ This project contains the embedded system code used for a Two Wheeled Inverted P
 
 ## Getting Started
 
-To get a copy of this project up and running on your local machine for development and testing purposes please follow these [instructions](https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control).
+There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. You can find everythng that you need to set up a VA3WAM compatable  work space in your own environment there or by  following the instructins and links below.  
 
 ### Prerequisites
 
@@ -17,7 +17,7 @@ To get a copy of this project up and running on your local machine for developme
 
 ## Running the tests
 
-AT the present time we have no testing strategy worked out.
+At the present time we have no testing strategy worked out.
 
 ## Deployment
 
