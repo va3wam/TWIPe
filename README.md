@@ -8,7 +8,7 @@ To get a copy of this project up and running on your local machine for developme
 
 ### Prerequisites
 
-You need to set up the VA3WAM development environment documented here.
+You need to set up the VA3WAM development environment documented [here](https://github.com/va3wam/va3wam.github.io/wiki/Tools).
 
 
 ### Installing
