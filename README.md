@@ -1,5 +1,6 @@
 # TWIPe
 
+
 This project contains the embedded system code used for a Two Wheeled Inverted Pendulum robot. 
 
 ## Getting Started
@@ -57,4 +58,5 @@ This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md
 * Tony DiCola and Adafruit Industries for their MQTT QOS1 library
 * Jeff Rowberg for the MPU6050 DMP logic
 * Daniel Eichhorn for OLED library
+
 
