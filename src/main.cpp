@@ -1,8 +1,8 @@
 /*************************************************************************************************************************************
  * @file main.cpp
- * @author Andrew Mitchell
+ * @author va3wam
  * @brief Gathers balacing telemetry data from MPU6050 via DMP firmware and sends it to MQTT broker
- * @version 0.1.6
+ * @version 0.1.7
  * @date 2020-03-13
  * @copyright Copyright (c) 2020
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
@@ -11,6 +11,7 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.1.7   2020-04-15 Swapped GPIO pins to match TWIPe SB7D PCB wiring
  * 0.1.6   2020-03-22 Fixed version comment
  * 0.1.5   2020-03-22 Cleaned up comments. Renamed AIO variables to MQTT since we are not using the Adafruit AIO server
  * 0.1.4   2020-03-22 Nested timer flag, DMP data ready flag and buffer read results to all DMP FIFO data reads in order to stabalize
@@ -44,22 +45,22 @@
 /// @brief Define OLED constants, classes and global variables 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define OLED_ADDRESS 0x3C
-#define OLED_SDA 4
-#define OLED_SCL 5
+#define OLED_SDA 22 // Pin 2 SB7D PCB LED jumper (really means LCD or OLED, silkscreen typo)
+#define OLED_SCL 14 // Pin 1 SB7D PCB LED jumper (really means LCD or OLED, silkscreen typo)
 SSD1306 display(OLED_ADDRESS, OLED_SDA, OLED_SCL);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define I2C bus constants, classes and global variables 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define MPU_SPEED 400000 // Define speed of I2C bus 2. Note 400KHz is the upper speed limit for ESP32 I2C
-#define MPU_SDA 22 // Define pin on the board used for Serial Data Line (SDA) for I2C bus 2
-#define MPU_SCL 23 // Define pin on the board used for Serial Clock Line (SCL) for I2C bus 2
+#define MPU_SDA 17 // Define pin on the board used for Serial Data Line (SDA) for I2C bus 2
+#define MPU_SCL 21 // Define pin on the board used for Serial Clock Line (SCL) for I2C bus 2
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define Huzzah32 GPIO pins
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define INTERRUPT_PIN 39  // use pin 39 (physical pin 8) on Huzzah32 board
-#define LED_PIN 13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
+#define LED_PIN 23 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define LED constants, classes and global variables 
