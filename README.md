@@ -20,6 +20,7 @@ To get a copy of this project up and running on your local machine for developme
 
 To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then use the local console terminal to see the results of the canned tests. The following is some smaple output that shows you the seven basic tests that will prove if your circuit is working or not.
 
+```
 ** <setup> TEST 1 - SERIAL PORT ============================================================= **
 ** <setup> If you can read this then the test is successful. The serial circuitry is working! **
 ** <setup> TEST 2 - I2C BUS ================================================================= **
@@ -44,6 +45,7 @@ To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code int
 ** <setup> TEST 6 & 7 - SOFTWARE CONTROLLED LED and SWITCH =================================== **
 ** <setup> Push the AMBER button in/out. Did the AMBER LED turn on/off? **
 ** <setup> Finally, press the GREEN button in/out once. Did this reset the robot? **
+```
 
 ## Deployment
 
