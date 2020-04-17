@@ -18,7 +18,7 @@ To get a copy of this project up and running on your local machine for developme
 
 ## Running the tests
 
-At the present time we have no testing strategy worked out.
+To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into the robot and use the console to see the results of the canned tests.
 
 ## Deployment
 
