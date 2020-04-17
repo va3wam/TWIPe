@@ -17,35 +17,13 @@ The VA3WAM development environment used to make the code in this repository is d
 To get a copy of this project up and running on your local machine for development and testing purposes please follow these [instructions](https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control).
 
 ## Running the tests
+You may wish to test the robot circuit or test the code that runs on the circuit.
 
-To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then use the local console terminal to see the results of the canned tests. The following is some smaple output that shows you the seven basic tests that will prove if your circuit is working or not.
+### Test the Circuit
+To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then folllow the test instructions found in that repository. 
 
-```
-<setup> TEST 1 - SERIAL PORT ============================================================= 
-<setup> If you can read this then the test is successful. The serial circuitry is working! 
-<setup> TEST 2 - I2C BUS ================================================================= 
-<scanBus0> Scan I2C bus 0 looking for devices... 
-<scanBus0> Found 2 device(s). 
-<scanBus1> Scan I2C bus 1 looking for devices...
-<scanBus1> Found 1 device(s). 
-<setup> TEST 3 - VOLTAGE DIVIDER CIRCUIT ================================================= 
-<setup> Battery level reading = 2640 
-<setup> TEST 4 - WIFI ==================================================================== 
-<scanNetworks> Scanning for WiFi Access Points. 
-<scanNetworks> Number of networks found: 1 
-<scanNetworks> Best SSID candidate = xxxx
-<connectToNetwork> Attempt to connect to an Access Point 
-<connectToNetwork> Connection to network FAILED 
-<setup> TEST 5 - STEPPER MOTORS ========================================================== 
-<setup> Parameters for this test... 
-<setup> Frequency = 167.000000 Hz (period of 0.005988 seconds) 
-<setup> Duty cycle = 50.000000 percent 
-<setup> Uptime = 0.002994 seconds. Downtime = 0.002994 seconds 
-<setup> Are the motors spinning? If so then this test passes 
-<setup> TEST 6 & 7 - SOFTWARE CONTROLLED LED and SWITCH =================================== 
-<setup> Push the AMBER button in/out. Did the AMBER LED turn on/off? 
-<setup> Finally, press the GREEN button in/out once. Did this reset the robot? 
-```
+### Test The Code
+We have not yet developed a test methodology for theee robot code.
 
 ## Deployment
 
