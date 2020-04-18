@@ -23,7 +23,7 @@ You may wish to test the robot circuit or test the code that runs on the circuit
 To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then folllow the test instructions found in that repository. 
 
 ### Test The Code
-We have not yet developed a test methodology for theee robot code.
+We have not yet developed a test methodology for the robot code.
 
 ## Deployment
 
