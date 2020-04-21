@@ -11,6 +11,8 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.1.8   2020-04-21 Moved GPIO pin definitions to huzzah32_pins.h and I2C meta data to i2c_metadata.h. Also added DEBUG flag and 
+ *                    associated DEBUG_PRINT macros.
  * 0.1.7   2020-04-15 Swapped GPIO pins to match TWIPe SB7D PCB wiring
  * 0.1.6   2020-03-22 Fixed version comment
  * 0.1.5   2020-03-22 Cleaned up comments. Renamed AIO variables to MQTT since we are not using the Adafruit AIO server
@@ -27,40 +29,48 @@
  *************************************************************************************************************************************/
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // TODO Add in command listen logic, possibly in its own FreeRTOS thread
-// TODO Stabalize code to stop it from randomly hanging
+// TODO Stabalize code to stop it from randomly hanging. Possibly use a local FIFO buffer to do this
 // TODO in UpdateMQTT() change data published from loop counter to MPU6050 pitch values
 // TODO Once an MQTT send fails they all seem to fail without recovering
 // TODO Add secure connection to MQTT broker. It is currenty unsecure
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include <Arduino.h> // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
 #include <WiFi.h> // Required to connect to WiFi network. Comes with Platform.io
-#include "Adafruit_MQTT.h" // https://github.com/adafruit/Adafruit_MQTT_Library
-#include "Adafruit_MQTT_Client.h" // https://github.com/adafruit/Adafruit_MQTT_Library
-#include "I2Cdev.h" // https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/I2Cdev/I2Cdev.h
-#include "MPU6050_6Axis_MotionApps_V6_12.h" // https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/MPU6050_6Axis_MotionApps_V6_12.h
-#include "Wire.h" // Required for I2C communication. Comes with Platform.io
-#include "SSD1306.h" // https://github.com/ThingPulse/esp8266-oled-ssd1306
+#include <Adafruit_MQTT.h> // https://github.com/adafruit/Adafruit_MQTT_Library
+#include <Adafruit_MQTT_Client.h> // https://github.com/adafruit/Adafruit_MQTT_Library
+#include <I2Cdev.h> // For MPU6050 - https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/I2Cdev/I2Cdev.h
+#include <MPU6050_6Axis_MotionApps_V6_12.h> // For  MPU6050 - https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/MPU6050_6Axis_MotionApps_V6_12.h
+#include <Wire.h> // Required for I2C communication. Comes with Platform.io
+#include <SSD1306.h> // For OLED - https://github.com/ThingPulse/esp8266-oled-ssd1306
+#include <huzzah32_pins.h> // Defines GPIO pins for Adafruit Huzzah32 dev board
+#include <i2c_metadata.h> // Defines all I2C related information incluing device addresses, bus pins and bus speeds
+#include <known_networks.h> // Defines Access points and passwords that the robot can scan for and connect to
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
+/// DEBUG to toggle debug messages on and off. NOte that all debug messages will get processed without the 
+/// need of clunky if statements. When DEBUG is false the macros simply do nothing.  
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#define DEBUG true // Comment/uncomment this line to turn debug tracing on/off
+#define DMP_TRACE false // Set to TRUE or FALSE to toggle DMP memory read/write activity
+#ifdef DEBUG // If this is a debug build
+  #ifndef DEBUG_PRINT // If this has not been defined in one of the included files
+      #define DEBUG_PRINT(x) Serial.print(x)
+      #define DEBUG_PRINTF(x, y) Serial.print(x, y)
+      #define DEBUG_PRINTLN(x) Serial.println(x)
+      #define DEBUG_PRINTLNF(x, y) Serial.println(x, y)
+  #else // Map macros to "do nothing" commands so that when is not TRUE these commands do nothing
+      #define DEBUG_PRINT(x)
+      #define DEBUG_PRINTF(x, y)
+      #define DEBUG_PRINTLN(x)
+      #define DEBUG_PRINTLNF(x, y)
+  #endif
+#endif
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define OLED constants, classes and global variables 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#define OLED_ADDRESS 0x3C
-#define OLED_SDA 22 // Pin 2 SB7D PCB LED jumper (really means LCD or OLED, silkscreen typo)
-#define OLED_SCL 14 // Pin 1 SB7D PCB LED jumper (really means LCD or OLED, silkscreen typo)
-SSD1306 display(OLED_ADDRESS, OLED_SDA, OLED_SCL);
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// @brief Define I2C bus constants, classes and global variables 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#define MPU_SPEED 400000 // Define speed of I2C bus 2. Note 400KHz is the upper speed limit for ESP32 I2C
-#define MPU_SDA 17 // Define pin on the board used for Serial Data Line (SDA) for I2C bus 2
-#define MPU_SCL 21 // Define pin on the board used for Serial Clock Line (SCL) for I2C bus 2
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// @brief Define Huzzah32 GPIO pins
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#define INTERRUPT_PIN 39  // use pin 39 (physical pin 8) on Huzzah32 board
-#define LED_PIN 23 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
+SSD1306 display(rightOLED_I2C_ADD, I2C_bus0_SDA, I2C_bus0_SCL);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define LED constants, classes and global variables 
@@ -112,15 +122,17 @@ portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED; // Syncronize variables be
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define WiFi constants, classes and global variables 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// TODO Relace with amWIFI libraray later
-#define WLAN_SSID "MN_BELL418"
-#define WLAN_PASS "5194741299"
-WiFiClient client; // Create an ESP8266 WiFiClient class to connect to the MQTT server
-//WiFiClientSecure client; // Use WiFiFlientSecure for SSL
-String myMACaddress; // MAC address of SOC used to ensure unique identity for each device
-String myHostNamePrefix = "Twipi"; // Suffix to add to WiFi host name for this robot  
-String myHostName; // myHostNamePrefix + myMACaddress. Used to create unique WiFi ID on AP as well as MQTT topic branches
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Variables used to store current WiFi network information for the robot
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+const char* mySSID = "NOTHING";
+const char* myPassword =  "NOTHING";
+String myMACaddress; // MAC address of this SOC. Used to uniquely identify this robot 
+String myIPAddress; // IP address of the SOC.
 String myAccessPoint; // WiFi Access Point that we managed to connected to 
+String myHostName; // Name by which we are known by the Access Point
+String myHostNameSuffix = "Twipe"; // Suffix to add to WiFi host name for this robot 
+WiFiClient client; // Create an ESP8266 WiFiClient class to connect to the MQTT server
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define MQTT constants, classes and global variables. 
@@ -184,6 +196,15 @@ unsigned long previousMillis = 0; // Tracks the last time loop() ended. Used to 
 unsigned long currentMillis = 0; // Tracks the current value of millis(). Used to control iteration speed of loop()
 unsigned long loopDelay = 0; // Track how many delay loops occur at the end of loop() to ensure consistent iterations.
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Define flags that are used to track what devices/functions are verified working after start up. Initilize false.  
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+boolean leftOLED_detected = false;
+boolean rightOLED_detected = false;
+boolean LCD_detected = false;
+boolean MPU6050_detected = false;
+boolean wifi_detected = false;
+
 /*************************************************************************************************************************************
  * @brief Interrupt Service Routine (ISR) that runs when the DMP firmware on the MPU6050 raises its interrupt pin indicating that it
  * has data in its FIFO buffer ready to be read over I2C 
@@ -234,6 +255,155 @@ String formatMAC()
   Serial.println(mac);
   return mac;
 } //formatMAC()
+
+/***********************************************************************************************************
+ * @brief This function returns a String version of the local IP address
+ ***********************************************************************************************************/
+String ipToString(IPAddress ip)
+{
+    Serial.println("<ipToString> Converting IP address to String.");
+    String s="";
+    for (int i=0; i<4; i++)
+    {
+      s += i  ? "." + String(ip[i]) : String(ip[i]);
+    } //for
+    Serial.print("<ipToString> IP Address = ");
+    Serial.println(s);
+    return s;
+} //ipToString()
+
+/***********************************************************************************************************
+ This function returns a String version of the local IP address.
+ ***********************************************************************************************************/
+void connectToNetwork() 
+{
+  int ConnectCount = 20; // Maximum number of AP connection attemts 
+  int ConnectAttempts = 0; // Number of AP connection attempts made
+  String tmpHostNameVar; // Hold WiFi host name created in this function
+
+  Serial.println("<connectToNetwork> Attempt to connect to an Access Point");
+  Serial.print("<connectToNetwork> Try connecting to AP = ");
+  Serial.println(mySSID);
+  WiFi.begin(mySSID, myPassword);
+  while ((WiFi.status() != WL_CONNECTED) && (ConnectCount > 0)) 
+  {
+    delay(1000);
+    Serial.print("<connectToNetwork> Establishing connection to WiFi. Connect attempt count down = ");
+    Serial.println(ConnectCount);
+    ConnectCount--;
+    ConnectAttempts++;
+  } //while
+  
+  if(WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("<connectToNetwork> Connection to network FAILED");
+    wifi_detected = false; // Set status of WiFi connection to FALSE 
+  } //if
+  else
+  {
+    myIPAddress = ipToString(WiFi.localIP());
+    myMACaddress = formatMAC();
+    myAccessPoint = WiFi.SSID();
+    tmpHostNameVar = myHostNameSuffix + myMACaddress;
+    WiFi.setHostname((char*)tmpHostNameVar.c_str());
+    myHostName = WiFi.getHostname();
+    wifi_detected = true; // Set status of WiFi connection to TRUE 
+    Serial.print("<connectToNetwork> Connection to network SUCCESSFUL after this many attempts: ");
+    Serial.println(ConnectAttempts);
+    Serial.println("<connectToNetwork> Network information is as follows..."); 
+    Serial.print("<connectToNetwork> - Access Point Robot is connected to = ");
+    Serial.println(myAccessPoint);
+    Serial.print("<connectToNetwork> - Robot Network Host Name = ");
+    Serial.println(myHostName);
+    Serial.print("<connectToNetwork> - Robot IP Address = ");
+    Serial.println(myIPAddress);
+    Serial.print("<connectToNetwork> - Robot MAC Address = ");
+    Serial.println(myMACaddress);
+  } //else
+} //connectToNetwork() 
+
+/***********************************************************************************************************
+ * @brief This function translates the type of encryption that an Access Point (AP) advertises (an an ENUM) 
+ * and returns a more human readable description of what that encryption method is.
+ ***********************************************************************************************************/
+String translateEncryptionType(wifi_auth_mode_t encryptionType) 
+{
+  switch (encryptionType) 
+  {
+    case (WIFI_AUTH_OPEN):
+      return "Open";
+    case (WIFI_AUTH_WEP):
+      return "WEP";
+    case (WIFI_AUTH_WPA_PSK):
+      return "WPA_PSK";
+    case (WIFI_AUTH_WPA2_PSK):
+      return "WPA2_PSK";
+    case (WIFI_AUTH_WPA_WPA2_PSK):
+      return "WPA_WPA2_PSK";
+    case (WIFI_AUTH_WPA2_ENTERPRISE):
+      return "WPA2_ENTERPRISE";
+    default:
+      return "UNKNOWN";
+  } //switch
+} //translateEncryptionType()
+
+/***********************************************************************************************************
+ * @brief This function scans the WiFi spectrum looking for Access Points (AP). It selects the AP with the 
+ * strongest signal which is included in the known network list.
+ ***********************************************************************************************************/
+void scanNetworks() 
+{
+  int numberOfNetworks = WiFi.scanNetworks(); // Used to track how many APs are detected by the scan
+  int StrongestSignal = -127; // Used to find the strongest signal. Set as low as possible to start
+  int SSIDIndex = 0; // Contains the SSID index number from the known list of APs
+  bool APknown; // Flag to indicate if the current AP appears in the known AP list
+
+  Serial.println("<scanNetworks> Scanning for WiFi Access Points.");
+  Serial.print("<scanNetworks> Number of networks found: ");
+  Serial.println(numberOfNetworks);
+  
+  // Loop through all detected APs
+  for (int i = 0; i < numberOfNetworks; i++) 
+  {
+    APknown = false;
+    Serial.print("<scanNetworks> Network name: ");
+    Serial.println(WiFi.SSID(i));
+    Serial.print("<scanNetworks> Signal strength: ");
+    Serial.println(WiFi.RSSI(i));
+    Serial.print("<scanNetworks> MAC address: ");
+    Serial.println(WiFi.BSSIDstr(i));
+    Serial.print("<scanNetworks> Encryption type: ");
+    String encryptionTypeDescription = translateEncryptionType(WiFi.encryptionType(i));
+    Serial.println(encryptionTypeDescription);
+    
+    // Scan table of known APs to see if the current AP is known to us 
+    for (int j =0; j< numKnownAPs; j++)
+    {
+      // If the current scanned AP appears in the known AP list note the index value and flag found
+      if(WiFi.SSID(i) == SSID[j])
+      {
+        APknown = true;
+        SSIDIndex = j;
+        Serial.println("<scanNetworks> This is a known network");
+        wifi_detected = true;
+      } //if
+    } //for
+
+    // If the current AP is known and has a stronger signal than the others that have been checked 
+    // then store it in the variables that will be used to connect to the AP later
+    if((APknown == true) && (WiFi.SSID(i).toInt() > StrongestSignal))
+    {
+      mySSID = SSID[SSIDIndex].c_str();
+      myPassword = Password[SSIDIndex].c_str();
+      StrongestSignal = WiFi.SSID(i).toInt();
+      Serial.println("<scanNetworks> This is the strongest signal so far");
+    } //if
+    Serial.println("<scanNetworks> -----------------------");
+  } //for
+
+  Serial.print("<scanNetworks> Best SSID candidate = ");
+  Serial.println(mySSID);
+} //scanNetworks()
 
 /*************************************************************************************************************************************
  * @brief Connect and reconnect to the MQTT broker as needed
@@ -355,7 +525,9 @@ void UpdateSerial(float yaw, float pitch, float roll)
 void UpdateOLED(float yaw, float pitch, float roll)
 {
   display.clear();        
-  display.drawString(64, 20, String(pitch * 180 / PI));
+//  display.drawString(64, 20, String(pitch * 180 / PI));
+//  display.drawString(64, 20, String(roll * 180 / PI));
+  display.drawString(64, 20, String(yaw * 180 / PI));
   display.display();        
 } //UpdateOLED()
 
@@ -364,32 +536,8 @@ void UpdateOLED(float yaw, float pitch, float roll)
  *************************************************************************************************************************************/
 void setupWiFi()
 {
-  String tmpHostNameVar; // Hold WiFi host name created in  this function
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Connect to WiFi Access Point
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  Serial.println(); Serial.println();
-  Serial.print("<setupWiFi> Connecting to ");
-  Serial.println(WLAN_SSID);
-  WiFi.begin(WLAN_SSID, WLAN_PASS);
-  while(WiFi.status() != WL_CONNECTED) // Loop until WiFi connection to AP established
-  {
-    delay(500);
-    Serial.print(".");
-  } //while
-  Serial.println();
-  Serial.println("<setupWiFi> WiFi connected");
-  Serial.print("<setupWiFi> IP address: "); Serial.println(WiFi.localIP());
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Set WiFi hostname listed by Access Point 
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  myMACaddress = formatMAC();
-  myAccessPoint = WiFi.SSID();
-  tmpHostNameVar = myHostNamePrefix + myMACaddress; // Build up the host name used for WiFi and MQTT branches
-  WiFi.setHostname((char*)tmpHostNameVar.c_str()); // Set the WiFi hostname for the AP 
-  myHostName = WiFi.getHostname(); // Put the WiFi hoset name into a variable to use with MQTT as well  
-  Serial.print("<setupWiFi> IP address: "); Serial.println(WiFi.localIP());
-  Serial.print("<setupWiFi> WiFi host name: "); Serial.println(myHostName);
+  scanNetworks();
+  connectToNetwork(); 
 } // setupWiFi()
 
 /*************************************************************************************************************************************
@@ -446,7 +594,7 @@ void setupLoopTimer()
 void setupMainLoopLED()
 {
   Serial.println(F("<setupMainLoopLED> Enable LED pin"));
-  pinMode(LED_PIN, OUTPUT); // configure LED for output
+  pinMode(gp_SWC_LED, OUTPUT); // configure LED for output
 } //setupMainLoopLED()
 
 /*************************************************************************************************************************************
@@ -473,7 +621,7 @@ void setupIMU()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   Serial.println(F("<setupIMU> Initializing MPU6050..."));
   mpu.initialize();
-  pinMode(INTERRUPT_PIN, INPUT);
+  pinMode(gp_IMU_INT, INPUT);
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief verify connection
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -513,9 +661,9 @@ void setupIMU()
     mpu.setDMPEnabled(true);
     // enable Arduino interrupt detection
     Serial.print(F("<setupIMU> Enabling DMP FIFO data ready GPIO pin "));
-    Serial.println(digitalPinToInterrupt(INTERRUPT_PIN));
+    Serial.println(digitalPinToInterrupt(gp_IMU_INT));
     Serial.println(F("<setupIMU> Attaching inetrrupt pin to dmpDataReady function"));
-    attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), dmpDataReady, RISING);
+    attachInterrupt(digitalPinToInterrupt(gp_IMU_INT), dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
     Serial.print("<setupIMU> MPU initialization status = ");
     Serial.println(mpuIntStatus);
@@ -548,7 +696,7 @@ void setup()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Initialize two wire bus known as Wire() with the pins and transmission speed required to communicate with the MPU6050
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  Wire.begin(MPU_SDA,MPU_SCL,MPU_SPEED);  
+  Wire.begin(I2C_bus1_SDA,I2C_bus1_SCL,I2C_bus1_speed);  
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Set up serial communication
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -612,7 +760,7 @@ void loop()
   // TODO learn about the three different dmpGet commands used here. Do we need them all? What do they do? an we call only 1?
   // TODO Make counter to go into else logic to count how often the buffer is found empty. Why pin high but buffer empty?
   // TODO Sometimes locks up right away. Why?
-   if(cntIMU >= tarIMU) // Check IMU timer 
+  if(cntIMU >= tarIMU) // Check IMU timer 
   {
     cntIMU = 0; // Reset IMU counter
     if(mpuInterrupt == true) // DMP interrupt flag went high and has not been reset
@@ -626,7 +774,7 @@ void loop()
         mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
       } //if
-      else // If DMP pin goews high but there is no data in the FIFO buffer then something weird happend
+      else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
       {
         DMP_FIFO_data_missing_cnt++; // Track how many times the FIFO pin  goes high but the buffer is empty  
       } //else
@@ -682,7 +830,7 @@ void loop()
     cntLED = 0; // Reset LED flashing counter  
     portEXIT_CRITICAL_ISR(&timerMux); // Allow ISR access to variable again  
     blinkState = !blinkState;
-    digitalWrite(LED_PIN, blinkState);
+    digitalWrite(gp_SWC_LED, blinkState);
   } //if
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Ensure that loop() always takes the same amount of time
