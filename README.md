@@ -22,7 +22,10 @@ You may wish to test the robot circuit or test the code that runs on the circuit
 ### Test the Circuit
 To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then folllow the test instructions found in that repository. 
 
-### Test The Code
+### Calibrate the MPU6050
+In order to get proper balancing values from the MPU6050 you must firt run [this](https://github.com/va3wam/TWIPeCalibrate) calibration code then update this code with the seed values produced.
+
+### Test This Code
 We have not yet developed a test methodology for the robot code.
 
 ## Deployment
