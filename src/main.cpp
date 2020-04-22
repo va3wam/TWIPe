@@ -700,7 +700,7 @@ void setupIMU()
 void cfg_by_MAC()
 {
     myMACaddress = formatMAC();
-    if(myMACaddress == "BCDDC2F7D6D5")
+    if(myMACaddress == "BCDDC2F7D6D5")    // This is Andrew's bot
     {
       Serial.println("<cfg_by_MAC> Setting up MAC BCDDC2F7D6D5 configuration");
       XGyroOffset = 135;
@@ -709,6 +709,17 @@ void cfg_by_MAC()
       XAccelOffset = -3396;
       YAccelOffset = 830;
       ZAccelOffset = 1890;      
+    } //if
+
+    if(myMACaddress == "B4E62D9EA8F9")    // This is Doug's bot
+    {
+      Serial.println("<cfg_by_MAC> Setting up MAC BCDDC2F7D6D5 configuration");
+      XGyroOffset = 60;
+      YGyroOffset = -10;
+      ZGyroOffset = -72;
+      XAccelOffset = -2070;
+      YAccelOffset = -70;
+      ZAccelOffset = 1641;      
     } //if
     else
     {
