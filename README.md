@@ -22,6 +22,13 @@ The VA3WAM development environment used to make the code in this repository is d
 
 To get a copy of this project up and running on your local machine for development and testing purposes please follow these [instructions](https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control).
 
+### Booting Up
+In order for the robot to balance properly you need to follow this boot up procedure:
+
+1. Lay the robot face down. THis is tricky with the control panel buttons and USB port so a jig may ne needed
+2. Boot up the robot. Wit until it is fully booted. Takes aboout a minute at most
+3. Slowly bring the robot to an upright position.
+
 ## Running the tests
 You may wish to test the robot circuit or test the code that runs on the circuit.
 
