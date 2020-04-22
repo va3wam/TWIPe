@@ -2,7 +2,7 @@
  * @file main.cpp
  * @author va3wam
  * @brief Gathers balacing telemetry data from MPU6050 via DMP firmware and sends it to MQTT broker
- * @version 0.1.9
+ * @version 0.1.10
  * @date 2020-03-13
  * @copyright Copyright (c) 2020
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
@@ -11,6 +11,8 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.1.10  2020-04-22 Added logic to manage configuration details by MAC address. So far only the MPU6050 offset values use this. Also
+ *                    changed DEBUG_PRINT 
  * 0.1.9   2020-04-21 Added new default offset values after running https://github.com/va3wam/TWIPeCalibrate  
  * 0.1.8   2020-04-21 Moved GPIO pin definitions to huzzah32_pins.h and I2C meta data to i2c_metadata.h. Also added DEBUG flag and 
  *                    associated DEBUG_PRINT macros.
@@ -34,8 +36,7 @@
 // TODO in UpdateMQTT() change data published from loop counter to MPU6050 pitch values
 // TODO Once an MQTT send fails they all seem to fail without recovering
 // TODO Add secure connection to MQTT broker. It is currenty unsecure
-// TODO Use conditional logic to set offset values for balancing based on MAC address. Unknow MAC address get canned values. 
-// TODO Figure out what number (YAW/PITCH/ROLL) we care about and find out why values are wrong.
+// TODO program locks up at random times even if just reading MPU6050 and dislaying on OLED (no MQTT). 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include <Arduino.h> // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
 #include <WiFi.h> // Required to connect to WiFi network. Comes with Platform.io
@@ -56,18 +57,16 @@
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define DEBUG true // Comment/uncomment this line to turn debug tracing on/off
 #define DMP_TRACE false // Set to TRUE or FALSE to toggle DMP memory read/write activity
-#ifdef DEBUG // If this is a debug build
-  #ifndef DEBUG_PRINT // If this has not been defined in one of the included files
-      #define DEBUG_PRINT(x) Serial.print(x)
-      #define DEBUG_PRINTF(x, y) Serial.print(x, y)
-      #define DEBUG_PRINTLN(x) Serial.println(x)
-      #define DEBUG_PRINTLNF(x, y) Serial.println(x, y)
-  #else // Map macros to "do nothing" commands so that when is not TRUE these commands do nothing
-      #define DEBUG_PRINT(x)
-      #define DEBUG_PRINTF(x, y)
-      #define DEBUG_PRINTLN(x)
-      #define DEBUG_PRINTLNF(x, y)
-  #endif
+#if DEBUG == true
+    #define AMDP(x) Serial.print(x)
+    #define AMDP_PRINTF(x, y) Serial.print(x, y)
+    #define AMDP_PRINTLN(x) Serial.println(x)
+    #define AMDP_PRINTLNF(x, y) Serial.println(x, y)
+#else // Map macros to "do nothing" commands so that when is not TRUE these commands do nothing
+    #define AMDP_PRINT(x)
+    #define AMDP_PRINTF(x, y)
+    #define AMDP_PRINTLN(x)
+    #define AMDP_PRINTLNF(x, y)
 #endif
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -100,9 +99,15 @@ VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measure
 VectorFloat gravity;    // [x, y, z]            gravity vector
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-
 // packet structure for InvenSense teapot demo
 uint8_t teapotPacket[14] = { '$', 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, '\r', '\n' };
+// Offset values for MPU6050 readings. See readme.md file for details 
+int16_t XGyroOffset; // Gyroscope x axis (Roll)
+int16_t YGyroOffset; // Gyroscope y axis (Pitch)
+int16_t ZGyroOffset; // Gyroscope z axis (Yaw)
+int16_t XAccelOffset; // Accelerometer x axis
+int16_t YAccelOffset; // Accelerometer y axis
+int16_t ZAccelOffset; // Accelerometer z axis
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief MPU6050 DMP firmware interrupt constants, classes and global variables 
@@ -305,7 +310,7 @@ void connectToNetwork()
   else
   {
     myIPAddress = ipToString(WiFi.localIP());
-    myMACaddress = formatMAC();
+//    myMACaddress = formatMAC();
     myAccessPoint = WiFi.SSID();
     tmpHostNameVar = myHostNameSuffix + myMACaddress;
     WiFi.setHostname((char*)tmpHostNameVar.c_str());
@@ -528,9 +533,7 @@ void UpdateSerial(float yaw, float pitch, float roll)
 void UpdateOLED(float yaw, float pitch, float roll)
 {
   display.clear();        
-//  display.drawString(64, 20, String(pitch * 180 / PI));
-//  display.drawString(64, 20, String(roll * 180 / PI));
-  display.drawString(64, 20, String(yaw * 180 / PI));
+  display.drawString(64, 20, String(roll * 180 / PI));
   display.display();        
 } //UpdateOLED()
 
@@ -648,12 +651,12 @@ void setupIMU()
   if (devStatus == 0) 
   {
     // Supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(134);
-    mpu.setYGyroOffset(-10);
-    mpu.setZGyroOffset(-82);
-    mpu.setXAccelOffset(-4017);
-    mpu.setYAccelOffset(715);
-    mpu.setZAccelOffset(5400);
+    mpu.setXGyroOffset(XGyroOffset);
+    mpu.setYGyroOffset(YGyroOffset);
+    mpu.setZGyroOffset(ZGyroOffset);
+    mpu.setXAccelOffset(XAccelOffset);
+    mpu.setYAccelOffset(YAccelOffset);
+    mpu.setZAccelOffset(ZAccelOffset);
     // Generate offsets and calibrate MPU6050
     mpu.CalibrateAccel(6);
     mpu.CalibrateGyro(6);
@@ -692,6 +695,34 @@ void setupIMU()
 } //setupIMU()
 
 /*************************************************************************************************************************************
+ * @brief Construct a new cfg by MAC object
+ *************************************************************************************************************************************/
+void cfg_by_MAC()
+{
+    myMACaddress = formatMAC();
+    if(myMACaddress == "BCDDC2F7D6D5")
+    {
+      Serial.println("<cfg_by_MAC> Setting up MAC BCDDC2F7D6D5 configuration");
+      XGyroOffset = 135;
+      YGyroOffset = -9;
+      ZGyroOffset = -85;
+      XAccelOffset = -3396;
+      YAccelOffset = 830;
+      ZAccelOffset = 1890;      
+    } //if
+    else
+    {
+      Serial.println("<cfg_by_MAC> MAC not recognized. Setting up generic configuration");
+      XGyroOffset = 135;
+      YGyroOffset = -9;
+      ZGyroOffset = -85;
+      XAccelOffset = -3396;
+      YAccelOffset = 830;
+      ZAccelOffset = 1890;      
+    } //else
+} //cfg_by_MAC()
+
+/*************************************************************************************************************************************
  * @brief Standard set up routine for Arduino programs
  *************************************************************************************************************************************/
 void setup() 
@@ -710,8 +741,9 @@ void setup()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   Serial.println(F("<setup> Start of setup"));
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Set up communication
+  /// @brief Set up communication and configuration
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  cfg_by_MAC(); // Use the devices MAC address to make specific configuration settings
   setupMainLoopLED(); // Set up the LED tht the loop() flashes
   setupWiFi(); // Set up WiFi communication
   setupOLED(); // Setup OLED communication

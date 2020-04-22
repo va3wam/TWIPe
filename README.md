@@ -5,7 +5,16 @@ This project contains the embedded system code used for a Two Wheeled Inverted P
 
 ## Getting Started
 
-There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. Everything that you need to set up a VA3WAM compatable work space can be found in the wiki. Alternativey, you can follow the instructions and links below to set up your environment.  
+There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. Everything that you need to set up a VA3WAM compatable work space can be found in the wiki. Alternativey, you can follow the instructions and links below to set up your environment. Here are the high level steps needed to get started with your very own TWIPe robot:
+
+<ol>
+<li>Connect the robot to your computer via a USB cable</li>
+<li>Test the robot's circuit. Code and instructions [here](https://github.com/va3wam/TWIPeTest)</li>
+<li>Get the calibration values. Code and instructions [here](https://github.com/va3wam/TWIPeCalibrate)</li>
+<li>Load up the TWIPe code (with the updated offset values if you did that step)</li>
+<li>Put the robot face down parallel to the ground</li>
+<li>Let it boot up</li>
+</ol>
 
 ### Prerequisites
 
