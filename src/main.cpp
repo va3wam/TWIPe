@@ -2,7 +2,7 @@
  * @file main.cpp
  * @author va3wam
  * @brief Gathers balacing telemetry data from MPU6050 via DMP firmware and sends it to MQTT broker
- * @version 0.1.7
+ * @version 0.1.9
  * @date 2020-03-13
  * @copyright Copyright (c) 2020
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
@@ -11,6 +11,7 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.1.9   2020-04-21 Added new default offset values after running https://github.com/va3wam/TWIPeCalibrate  
  * 0.1.8   2020-04-21 Moved GPIO pin definitions to huzzah32_pins.h and I2C meta data to i2c_metadata.h. Also added DEBUG flag and 
  *                    associated DEBUG_PRINT macros.
  * 0.1.7   2020-04-15 Swapped GPIO pins to match TWIPe SB7D PCB wiring
@@ -33,6 +34,8 @@
 // TODO in UpdateMQTT() change data published from loop counter to MPU6050 pitch values
 // TODO Once an MQTT send fails they all seem to fail without recovering
 // TODO Add secure connection to MQTT broker. It is currenty unsecure
+// TODO Use conditional logic to set offset values for balancing based on MAC address. Unknow MAC address get canned values. 
+// TODO Figure out what number (YAW/PITCH/ROLL) we care about and find out why values are wrong.
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #include <Arduino.h> // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
 #include <WiFi.h> // Required to connect to WiFi network. Comes with Platform.io
@@ -644,13 +647,13 @@ void setupIMU()
   // make sure it worked (returns 0 if so)
   if (devStatus == 0) 
   {
-    // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(39);
-    mpu.setYGyroOffset(111);
-    mpu.setZGyroOffset(-73);
-    mpu.setXAccelOffset(-794);
-    mpu.setYAccelOffset(12);
-    mpu.setZAccelOffset(1305);
+    // Supply your own gyro offsets here, scaled for min sensitivity
+    mpu.setXGyroOffset(134);
+    mpu.setYGyroOffset(-10);
+    mpu.setZGyroOffset(-82);
+    mpu.setXAccelOffset(-4017);
+    mpu.setYAccelOffset(715);
+    mpu.setZAccelOffset(5400);
     // Generate offsets and calibrate MPU6050
     mpu.CalibrateAccel(6);
     mpu.CalibrateGyro(6);
@@ -712,7 +715,8 @@ void setup()
   setupMainLoopLED(); // Set up the LED tht the loop() flashes
   setupWiFi(); // Set up WiFi communication
   setupOLED(); // Setup OLED communication
-  setupMQTT(); // Set up MQTT communication
+  /// TODO Add this back to use MQTT
+//  setupMQTT(); // Set up MQTT communication
   setupIMU(); // Set up IMU communication
   setupLoopTimer(); // Set up the timer that controls loop() events
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -742,6 +746,7 @@ void loop()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Display the current counter values for each event
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*
   Serial.print("<loop> LED/OLED/MQTT/IMU/LOOP | MQTT fails/DMP fails/Loop Delay Cnt\t"); 
   Serial.print(cntLED); Serial.print("\t");
   Serial.print(cntOLED); Serial.print("\t");
@@ -751,7 +756,7 @@ void loop()
   Serial.print(MQTT_publish_balance_fail_cnt); Serial.print("\t");
   Serial.print(DMP_FIFO_data_missing_cnt); Serial.print("\t");
   Serial.println(loopDelay);
-
+*/
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Retrieve DMP FIFO data when the flag indicates that the MPU6050 DMP has raised its interrupt pin on the GY521 board
   /// @note In order to read data from the DMP FIFO the following conditions must be met: 1) The IMU counter must have hit its 
@@ -783,7 +788,7 @@ void loop()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Update serial with balance data when the time is right
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//  UpdateSerial(ypr[0], ypr[1], ypr[2]); // Send data to serial terminal
+  UpdateSerial(ypr[0], ypr[1], ypr[2]); // Send data to serial terminal
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Update OLED with balance data when the time is right
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -797,6 +802,8 @@ void loop()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Update MQTT when the time is right
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /// TODO Add this back to use MQTT 
+  /* 
   if(cntMQTT >= tarMQTT)
   {
     portENTER_CRITICAL_ISR(&timerMux); // Prevent ISR from updating variable while we are changing it
@@ -804,6 +811,7 @@ void loop()
     portEXIT_CRITICAL_ISR(&timerMux); // Allow ISR access to variable again  
     UpdateMQTT(ypr[0], ypr[1], ypr[2]); // Send data to MQTT broker    
   } //if
+  */
 /*
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Ping MQTT broker to keep connection open. Only required of period between communicatins is more than KEEPALIVE value

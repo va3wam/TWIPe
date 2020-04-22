@@ -9,8 +9,7 @@ There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) t
 
 ### Prerequisites
 
-The VA3WAM development environment used to make the code in this repository is documented [here](https://github.com/va3wam/va3wam.github.io/wiki/Tools).
-
+The VA3WAM development environment used to make the code in this repository is documented [here](https://github.com/va3wam/va3wam.github.io/wiki/Tools). To get the best results you need to run the [calibration program](https://github.com/va3wam/TWIPeCalibrate) first. Following the instrcutions provided in the readme file before proceeding with this program.
 
 ### Installing
 
