@@ -2,8 +2,8 @@
  * @file main.cpp
  * @author va3wam
  * @brief Gathers balacing telemetry data from MPU6050 via DMP firmware and sends it to MQTT broker
- * @version 0.1.10
- * @date 2020-03-13
+ * @version 0.1.11
+ * @date 2020-04-22
  * @copyright Copyright (c) 2020
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
@@ -11,6 +11,7 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.1.11  2020-04-22 Added Doug's TWIPe MAC address for config management
  * 0.1.10  2020-04-22 Added logic to manage configuration details by MAC address. So far only the MPU6050 offset values use this. Also
  *                    changed DEBUG_PRINT 
  * 0.1.9   2020-04-21 Added new default offset values after running https://github.com/va3wam/TWIPeCalibrate  
@@ -710,8 +711,7 @@ void cfg_by_MAC()
       YAccelOffset = 830;
       ZAccelOffset = 1890;      
     } //if
-
-    if(myMACaddress == "B4E62D9EA8F9")    // This is Doug's bot
+    else if(myMACaddress == "B4E62D9EA8F9")    // This is Doug's bot
     {
       Serial.println("<cfg_by_MAC> Setting up MAC BCDDC2F7D6D5 configuration");
       XGyroOffset = 60;
@@ -720,7 +720,7 @@ void cfg_by_MAC()
       XAccelOffset = -2070;
       YAccelOffset = -70;
       ZAccelOffset = 1641;      
-    } //if
+    } //else if
     else
     {
       Serial.println("<cfg_by_MAC> MAC not recognized. Setting up generic configuration");
