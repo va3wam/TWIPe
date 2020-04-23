@@ -30,7 +30,7 @@ In order for the robot to balance properly you need to follow this boot up proce
 3. Slowly bring the robot to an upright position.
 
 ## Running the tests
-You may wish to test the robot circuit or test the code that runs on the circuit.
+You may wish to test the robot circuit or test the code that runs on the circuit. If you have trouble uploading code to the robot make sure that the GREEN reset button is in the out position. Turning the GREEN button on/off can sometimes help as well. 
 
 ### Test the Circuit
 To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then folllow the test instructions found in that repository. 
