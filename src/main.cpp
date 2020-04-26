@@ -11,6 +11,7 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.1.12  2020-04-22 Put MUX protecttion around cntIMU = 0 to prevent ISR/mainline contention access this variable.
  * 0.1.11  2020-04-22 Added Doug's TWIPe MAC address for config management
  * 0.1.10  2020-04-22 Added logic to manage configuration details by MAC address. So far only the MPU6050 offset values use this. Also
  *                    changed DEBUG_PRINT 
@@ -73,7 +74,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define OLED constants, classes and global variables 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-SSD1306 display(rightOLED_I2C_ADD, I2C_bus0_SDA, I2C_bus0_SCL);
+SSD1306 display(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define LED constants, classes and global variables 
@@ -741,7 +742,7 @@ void setup()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Initialize two wire bus known as Wire() with the pins and transmission speed required to communicate with the MPU6050
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  Wire.begin(I2C_bus1_SDA,I2C_bus1_SCL,I2C_bus1_speed);  
+  Wire.begin(gp_I2C_IMU_SDA,gp_I2C_IMU_SCL,I2C_bus1_speed);  
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Set up serial communication
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -810,12 +811,11 @@ void loop()
   // TODO Sometimes locks up right away. Why?
   if(cntIMU >= tarIMU) // Check IMU timer 
   {
+    portENTER_CRITICAL(&dmpMUX); // Start coordinate ISR and main loop
     cntIMU = 0; // Reset IMU counter
+    portEXIT_CRITICAL(&dmpMUX); // End coordinate ISR and loop    
     if(mpuInterrupt == true) // DMP interrupt flag went high and has not been reset
     {
-      portENTER_CRITICAL(&dmpMUX); // Start coordinate ISR and main loop
-      mpuInterrupt = false; // Reset DMP data ready flag
-      portEXIT_CRITICAL(&dmpMUX); // End coordinate ISR and loop    
       if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer. 
       {  
         mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
@@ -826,6 +826,9 @@ void loop()
       {
         DMP_FIFO_data_missing_cnt++; // Track how many times the FIFO pin  goes high but the buffer is empty  
       } //else
+      portENTER_CRITICAL(&dmpMUX); // Start coordinate ISR and main loop
+      mpuInterrupt = false; // Reset DMP data ready flag
+      portEXIT_CRITICAL(&dmpMUX); // End coordinate ISR and loop    
     } //if
   } //if
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
