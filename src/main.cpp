@@ -1,45 +1,22 @@
 /*************************************************************************************************************************************
  * @file main.cpp
  * @author va3wam
- * @brief Gathers balacing telemetry data from MPU6050 via DMP firmware and sends it to MQTT broker
- * @version 0.1.11
- * @date 2020-04-22
+ * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
+ * @version 0.0.1
+ * @date 2020-04-25
  * @copyright Copyright (c) 2020
- * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
- * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
- * 0.1.12  2020-04-22 Put MUX protecttion around cntIMU = 0 to prevent ISR/mainline contention access this variable.
- * 0.1.11  2020-04-22 Added Doug's TWIPe MAC address for config management
- * 0.1.10  2020-04-22 Added logic to manage configuration details by MAC address. So far only the MPU6050 offset values use this. Also
- *                    changed DEBUG_PRINT 
- * 0.1.9   2020-04-21 Added new default offset values after running https://github.com/va3wam/TWIPeCalibrate  
- * 0.1.8   2020-04-21 Moved GPIO pin definitions to huzzah32_pins.h and I2C meta data to i2c_metadata.h. Also added DEBUG flag and 
- *                    associated DEBUG_PRINT macros.
- * 0.1.7   2020-04-15 Swapped GPIO pins to match TWIPe SB7D PCB wiring
- * 0.1.6   2020-03-22 Fixed version comment
- * 0.1.5   2020-03-22 Cleaned up comments. Renamed AIO variables to MQTT since we are not using the Adafruit AIO server
- * 0.1.4   2020-03-22 Nested timer flag, DMP data ready flag and buffer read results to all DMP FIFO data reads in order to stabalize
- *                    IMU data read logic.  Also moved IMU calibration logic inside status check of IMU to avoid attempting to 
- *                    configure the IMU while it is in a bad state. Cleaned up comments and removed old commented out code. Removed
- *                    MQTT manager function (replaced with updateMQTT). Added counters to track erros with MQTT writing and DMP 
- *                    reading. Added counter resets at the end of setup(). Replaced delay(100) at bottom of loop() with millis()
- *                    logic to make iterations consistent.
- * 0.1.3   2020-03-20 Added timer ISR logic to manage event timing in loop()
- * 0.1.2   2020-03-18 Removed FreeRTOS task and broke setup into more steps. Everything works but is too slow and seems to hang
- * 0.1.1   2020-03-14 Added FreeRTOS task pegged to core 0 that controls MQTT communication
- * 0.1.0   2020-03-13 Program created
+ * 0.0.2   2020-04-27 Special trimmed down build that just doe IMU output to the serial port
+ * 0.0.1   2020-03-13 Program created
  *************************************************************************************************************************************/
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// TODO Add in command listen logic, possibly in its own FreeRTOS thread
-// TODO Stabalize code to stop it from randomly hanging. Possibly use a local FIFO buffer to do this
-// TODO in UpdateMQTT() change data published from loop counter to MPU6050 pitch values
-// TODO Once an MQTT send fails they all seem to fail without recovering
-// TODO Add secure connection to MQTT broker. It is currenty unsecure
-// TODO program locks up at random times even if just reading MPU6050 and dislaying on OLED (no MQTT). 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// TODO Add ability to get commands sent from MQTT broker and  process them. Start with toggle of MQTT balance telemetry
+// TODO Add boot sequence that 1) checks Flash for config, or 2) asks MQTT for config, or 3) Uses default values in include file
+// TODO Add MQTT topic which is updated at boot up
+// TODO Make motor logic, use small up time. Time between raising edge to affect speed
+// TODO Add metadata MQTT topic and update every 30 seconds 
 #include <Arduino.h> // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
 #include <WiFi.h> // Required to connect to WiFi network. Comes with Platform.io
 #include <Adafruit_MQTT.h> // https://github.com/adafruit/Adafruit_MQTT_Library
@@ -60,7 +37,7 @@
 #define DEBUG true // Comment/uncomment this line to turn debug tracing on/off
 #define DMP_TRACE false // Set to TRUE or FALSE to toggle DMP memory read/write activity
 #if DEBUG == true
-    #define AMDP(x) Serial.print(x)
+    #define AMDP_PRINT(x) Serial.print(x)
     #define AMDP_PRINTF(x, y) Serial.print(x, y)
     #define AMDP_PRINTLN(x) Serial.println(x)
     #define AMDP_PRINTLNF(x, y) Serial.println(x, y)
@@ -130,9 +107,6 @@ portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED; // Syncronize variables be
 #define TIMER0_INT_CNT 20 // Number that TIMER0 counts up before triggering an interrupt
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// @brief Define WiFi constants, classes and global variables 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Variables used to store current WiFi network information for the robot
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 const char* mySSID = "NOTHING";
@@ -175,36 +149,29 @@ String MQTT_Telemetry_Balance; // Topic tree we publish balance telemetry to
 /// @brief Initialize MQTT broker connection and both SUB and PUB topics
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 Adafruit_MQTT_Client mqtt(&client, MQTT_BROKER_IP, MQTT_BROKER_PORT, MQTT_USERNAME, MQTT_KEY); // Connect to MQTT broker
-Adafruit_MQTT_Publish topicTelemetryBalance = Adafruit_MQTT_Publish(&mqtt, MQTT_USERNAME MQTT_TEL_BAL,MQTT_QOS_1); // Outgoing balance data
-Adafruit_MQTT_Subscribe topicRemoteCommands = Adafruit_MQTT_Subscribe(&mqtt, MQTT_USERNAME MQTT_IN_CMD,MQTT_QOS_1); // Incoming commands
+Adafruit_MQTT_Publish topicTelemetryBalance = Adafruit_MQTT_Publish(&mqtt, MQTT_USERNAME MQTT_TEL_BAL, MQTT_QOS_1); // Outgoing balance data
+Adafruit_MQTT_Subscribe topicRemoteCommands = Adafruit_MQTT_Subscribe(&mqtt, MQTT_USERNAME MQTT_IN_CMD, MQTT_QOS_1); // Incoming commands
+Adafruit_MQTT_Subscribe onoffbutton = Adafruit_MQTT_Subscribe(&mqtt, MQTT_USERNAME MQTT_IN_CMD, MQTT_QOS_1);
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Global control variables.  
-/// @note Different events require different timing. To keep things coordinated timer values have been selected that are multiples of 
-/// each other while being consistent with the performance seen for each device during testing. These values are as follows:
-/// Item     | Freq (Hz) | Counter   
-/// :------- | :-------: | :-------:
-/// Loop     | 500       | 100
-/// MPU6050  | 100       | 500
-/// OLED     | 250       | 200
-/// MQTT     | 20        | 2500
-/// LED      | 1         | 50000
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-#define tarIMU 500 // MPU6050 is to be updated at 100Hz (TIMER0 count of 500) 
-#define tarOLED 200 // OLED is to be updated at 250Hz (TIMER0 count of 200)
-#define tarMQTT 2500 // MQTT broker is to be updated at 20Hz (TIMER0 count of 2500)  
-#define tarLED 50000 // LED is to be updated at 1Hz (TIMER0 count of 50000) 
+#define tmrIMU 200 // Milliseconds to wait between reading data to IMU over I2C
+#define tmrOLED 200 // Milliseconds to wait between sending data to OLED over I2C
+#define tmrMQTT 200 // Milliseconds to wait between sending data to MQTT broker over WiFi  
+#define tmrMETADATA 2000 // Milliseconds to wait between sending data to serial port
+#define tmrLED 1000 / 2 // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
 uint32_t cntLoop = 0; // Track how many times loop() has iterated
-volatile int cntIMU = 0; // Track how many times the MPU6050 DMP firmware has signalled that a packet it ready to be read 
-volatile int cntOLED = 0; // Track how many times loop() has iterated since last OLED update
-volatile int cntMQTT = 0; // Track how many times loop() has iterated since last post to MQTT broker
-volatile int cntLED = 0; // Track how many times loop() has iterated since last LED value inversion
+int goIMU = 0; // Target time for next read of IMU data 
+int goOLED = 0; // Target time for next OLED update
+int goMQTT = 0; // Target time for next MQTT broker update
+int goMETADATA = 0; // Target time for next serial port
+int goLED = 0; // Target time for next toggle of LED
 int MQTT_publish_balance_fail_cnt = 0; // Track how many times pubishing balance data returns a fail code
-int DMP_FIFO_data_missing_cnt = 0; // Track how many times the FIFO pin  goes high but the buffer is empty 
-unsigned long previousMillis = 0; // Tracks the last time loop() ended. Used to control iteration speed of loop()
-#define LOOP_INTERVAL 100 // Sets the target time for how long loop() should take before iterating (in millis())
-unsigned long currentMillis = 0; // Tracks the current value of millis(). Used to control iteration speed of loop()
-unsigned long loopDelay = 0; // Track how many delay loops occur at the end of loop() to ensure consistent iterations.
+int MQTT_publish_balance_success_cnt = 0; // Track how many times pubishing balance data returns a success code
+int DMP_FIFO_data_missing_cnt = 0; // Track how many times the FIFO pin goes high but the buffer is empty 
+int DMP_FIFO_data_exists_cnt = 0; // Track how many times the FIFO pin goes high and there is data in the buffer 
+boolean sendMetaDataToMQTT = false; // Used to decide if metadata about the code shoud go to MQTT broker or serial port
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /// @brief Define flags that are used to track what devices/functions are verified working after start up. Initilize false.  
@@ -227,25 +194,6 @@ void dmpDataReady()
   mpuInterrupt = true; // Flag the fact that there is data ready to be read
   portEXIT_CRITICAL(&dmpMUX); // Allow loop() access to variable again
 } //dmpDataReady()
-
-/*************************************************************************************************************************************
- * @brief Interrupt Service Routine (ISR) that runs when the timer counter reaches its configured target
- * @note This function definition includes the IRAM_ATTR attribute in order for the compiler to place the code in IRAM. When this is 
- * done the function should only call functions also placed in IRAM
- * TODO Understand the use or IRAM
- *************************************************************************************************************************************/
-void IRAM_ATTR onTimer() 
-{
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Increment counters used to time when different actions will take place
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  portENTER_CRITICAL_ISR(&timerMux); // Prevent loop() from updating variable while we are changing it
-  cntOLED ++; // Increment OLED update counter
-  cntMQTT ++; // Increment MQTT broker update counter
-  cntLED ++; // Increment LED flashing counter
-  cntIMU++; // Increment IMU update counter
-  portEXIT_CRITICAL_ISR(&timerMux); // Allow loop() access to variable again
-} //onTimer()
 
 /*************************************************************************************************************************************
  * @brief Strips the colons off the MAC address of this device
@@ -479,6 +427,15 @@ void printBinary(byte v, int8_t num_places)
 /*************************************************************************************************************************************
  * @brief Retrieve message from MQTT broker 
  *************************************************************************************************************************************/
+void cmdCallback(char *data, uint16_t len) 
+{
+  Serial.print("<cmdCallback> Command recieved = ");
+  Serial.println(data);
+} //cmdCallback()
+
+/*************************************************************************************************************************************
+ * @brief Retrieve message from MQTT broker 
+ *************************************************************************************************************************************/
 // TODO Put this into its own thread so that it can run without interfering with telemetry posting and balancing logic
 void getMQTTcmd()
 {
@@ -499,44 +456,65 @@ void getMQTTcmd()
 
 /*************************************************************************************************************************************
  * @brief Send message to MQTT broker 
+ * @param angle Angle of robot lean in eulers. To convert to degrees use this formula: degrees = angle * 180 / PI
  *************************************************************************************************************************************/
-void UpdateMQTT(float yaw, float pitch, float roll)
+void updateMQTT(float angle)
 {
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Maintain MQTT broker connection
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   MQTT_connect(); // Ensure the connection to the MQTT server is alive
-//  if(! topicTelemetryBalance.publish(pitch))  // Publish pitch value to MQTT broker
-  if(! topicTelemetryBalance.publish(cntLoop))  // Publish cntLoop to MQTT broker.  For testing only
+  String tmp = String(millis()) + "," + String(angle * 180 / PI);
+  char msg[15];
+  tmp.toCharArray(msg,sizeof(tmp));
+  //if(! topicTelemetryBalance.publish(angle * 180 / PI))  // Publish uint32_t to MQTT broker 
+  boolean rtn = topicTelemetryBalance.publish(msg); // Publish string out to MQTT broker
+  if(!rtn)  // Check for fail error code
   {
-    MQTT_publish_balance_fail_cnt++; // Track how many times publishing balance data returns a fail code. Program can continue.
+    MQTT_publish_balance_fail_cnt++; // Track how many times publishing balance data returns a fail code.
   } //if
+  else // Put counter here to  track successful posts
+  {
+    MQTT_publish_balance_success_cnt++; // Track how many times publishing balance data returns a success code.
+  } //else
+  goMQTT = millis() + tmrMQTT; // Reset MQTT broker update target time  
 } //UpdateMQTT()
 
 /*************************************************************************************************************************************
- * @brief Update serial port terminal with balance data
+ * @brief Send updated metadata about the running of the code.
+ * @param sendToMQTT 
+ * # Table of Metadata tracked for TWIPe Robot Code
+ * | Item | Data Point                                                                                                  |
+ * |:-----------------------|:-------------------------------------------------------------------------------------------|
+ * | Time Stamp             | Time ESP32 has been runing in milli seconds |
+ * | Balance telemetry send | Success count  |
+ * | Balance telemetry send | Failure count  |
+ * | MPU6050 DMO FIFO read  | Success count  |
+ * | MPU6050 DMO FIFO read  | Failure count  |
  *************************************************************************************************************************************/
-void UpdateSerial(float yaw, float pitch, float roll)
+void updateMetaData(float yaw, float pitch, float roll)
 {
-  // display Euler angles in degrees in console
-  Serial.print("<UpdateSerial> ypr\t");
+ // display Euler angles in degrees in console
+  Serial.print("<updateMetaData> ypr\t");
   Serial.print(yaw * 180 / PI); // Change M_PI to PI
   Serial.print("\t");
   Serial.print(pitch * 180 / PI); // Change M_PI to PI
   Serial.print("\t");
   Serial.println(roll * 180 / PI); // Change M_PI to PI
-} // UpdateSerial()
+} // updateMetaData()
 
 /*************************************************************************************************************************************
  * @brief Update OLED dipsplay 
+ * @param angle Angle of robot lean in eulers. To convert to degrees use this formula: degrees = angle * 180 / PI
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
  *************************************************************************************************************************************/
-void UpdateOLED(float yaw, float pitch, float roll)
+void updateOLED(float angle)
 {
   display.clear();        
-  display.drawString(64, 20, String(roll * 180 / PI));
-  display.display();        
+  display.drawString(64, 20, String(angle * 180 / PI));
+  display.display();  
+  goOLED = millis() + tmrOLED; // Reset OLED update target time
 } //UpdateOLED()
 
 /*************************************************************************************************************************************
@@ -554,6 +532,14 @@ void setupWiFi()
 void setupMQTT()
 {
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /// @brief If there is no WiFi connection quit this function immediatey
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  if(!wifi_detected)
+  {
+      Serial.print("<setupMQTT> No WiFi,  cannot communicate with MQTT broker.");
+      return;
+  } //if
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Set up topic tree for sending balancing telemetry data
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   MQTT_Telemetry_Balance = myHostName + MQTT_TEL_BAL; // Balance telemetry tree we publish to
@@ -565,6 +551,7 @@ void setupMQTT()
   MQTT_Incoming_Commands = myHostName + MQTT_IN_CMD; // Topic tree we subscribe to to get remote commands
   topicRemoteCommands.topic = MQTT_Incoming_Commands.c_str(); // Set remote topic name to use MAC address and defined branch path
   Serial.print("<setupMQTT> Subscribe to command feed "); Serial.println(MQTT_Incoming_Commands);
+//  topicRemoteCommands.setCallback(cmdCallback); // Set up callback for incoming remote commands
   mqtt.subscribe(&topicRemoteCommands); // Subscribe to MQTT topic containing incoming remote commands
   Serial.print("<setupMQTT> MQTT keep alive set to "); Serial.print(MQTT_CONN_KEEPALIVE); Serial.println(" seconds");
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -583,18 +570,6 @@ void setupMQTT()
                           CORE_1); // Seventh argument specifies which of the two CPU cores to pin this task to  
 */
 } //setupMQTT()
-
-/*************************************************************************************************************************************
- * @details Set up the timer that sets flags used to control events in loop()
- *************************************************************************************************************************************/
-void setupLoopTimer()
-{
-  Serial.println(F("<setupLoopTimer> Configure TIMER0 to call ISR onTimer()"));
-  timer0Pointer = timerBegin(TIMER0, TIMER0_PRESCALER, TIMER0_CNT_UP); // Define pointer for timer0
-  timerAttachInterrupt(timer0Pointer, &onTimer, TIMER0_INT_EDGE); // Bind TIMER0 to the handling function onTimer(), interrupt on EDGE
-  timerAlarmWrite(timer0Pointer, TIMER0_INT_CNT, TIMER0_RELOAD); // Specify counter value that will generae a TIMER0 interrupt
-  timerAlarmEnable(timer0Pointer); // Enable TIMER0 
-} //setupLoopTimer()
 
 /*************************************************************************************************************************************
  * @brief Set up the LED that is flashed by loop()
@@ -735,6 +710,36 @@ void cfg_by_MAC()
 } //cfg_by_MAC()
 
 /*************************************************************************************************************************************
+ * @brief Flash AMBER LED on fron panel button
+ *************************************************************************************************************************************/
+void updateLED()
+{
+  blinkState = !blinkState;
+  digitalWrite(gp_SWC_LED, blinkState);
+  goLED = millis() + tmrLED; // Reset LED flashing counter
+} // updateLED()
+
+/*************************************************************************************************************************************
+ * @brief Retrieve DMP FIFO data
+ *************************************************************************************************************************************/
+// TODO learn about the three different dmpGet commands used here. Do we need them all? What do they do? an we call only 1? 
+void readIMU()
+{
+  if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer. 
+  {  
+    mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
+    mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
+    DMP_FIFO_data_exists_cnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
+  } //if
+  else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
+  {
+    DMP_FIFO_data_missing_cnt++; // Track how many times the FIFO pin goes high but the buffer is empty  
+  } //else
+  goIMU = millis() + tmrIMU; // Reset IMU update counter  
+} // updateLED()
+
+/*************************************************************************************************************************************
  * @brief Standard set up routine for Arduino programs
  *************************************************************************************************************************************/
 void setup() 
@@ -756,13 +761,11 @@ void setup()
   /// @brief Set up communication and configuration
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   cfg_by_MAC(); // Use the devices MAC address to make specific configuration settings
-  setupMainLoopLED(); // Set up the LED tht the loop() flashes
-  setupWiFi(); // Set up WiFi communication
-  setupOLED(); // Setup OLED communication
-  /// TODO Add this back to use MQTT
+  setupMainLoopLED(); // Set up the LED that the loop() flashes
+//  setupWiFi(); // Set up WiFi communication
+//  setupOLED(); // Setup OLED communication
 //  setupMQTT(); // Set up MQTT communication
   setupIMU(); // Set up IMU communication
-  setupLoopTimer(); // Set up the timer that controls loop() events
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Announce end of startup
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -770,15 +773,13 @@ void setup()
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /// @brief Reset all timing counters
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  portENTER_CRITICAL_ISR(&timerMux); // Prevent loop() from updating variable while we are changing it
-  cntOLED = 0; // Reset OLED update counter
-  cntMQTT = 0; // Reset MQTT broker update counter
-  cntLED = 0; // Reset LED flashing counter
-  cntIMU = 0; // Reset IMU update counter
-  portEXIT_CRITICAL_ISR(&timerMux); // Allow loop() access to variable again
+  goOLED = millis() + tmrOLED; // Reset OLED update counter
+  goMQTT = millis() + tmrMQTT; // Reset MQTT broker update counter
+  goLED = millis() + tmrLED; // Reset LED flashing counter
+  goIMU = millis() + tmrIMU; // Reset IMU update counter
+  goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
   cntLoop = 0; // Loop counter does not interact with timer ISR so no muxing is required 
-  currentMillis = millis(); // Initialize counter for timing loop() 
-  previousMillis = currentMillis; // Set new target time for loop() iteration
+  mqtt.subscribe(&onoffbutton);
 } //setup()
 
 /*************************************************************************************************************************************
@@ -787,113 +788,10 @@ void setup()
 void loop() 
 {
   cntLoop ++; // Increment loop() counter
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Display the current counter values for each event
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/*
-  Serial.print("<loop> LED/OLED/MQTT/IMU/LOOP | MQTT fails/DMP fails/Loop Delay Cnt\t"); 
-  Serial.print(cntLED); Serial.print("\t");
-  Serial.print(cntOLED); Serial.print("\t");
-  Serial.print(cntMQTT); Serial.print("\t");
-  Serial.print(cntIMU); Serial.print("\t");
-  Serial.print(cntLoop); Serial.print("\t | \t"); 
-  Serial.print(MQTT_publish_balance_fail_cnt); Serial.print("\t");
-  Serial.print(DMP_FIFO_data_missing_cnt); Serial.print("\t");
-  Serial.println(loopDelay);
-*/
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Retrieve DMP FIFO data when the flag indicates that the MPU6050 DMP has raised its interrupt pin on the GY521 board
-  /// @note In order to read data from the DMP FIFO the following conditions must be met: 1) The IMU counter must have hit its 
-  /// target value, 2) the DMP interrupt flag must be set true, and 3) the DMP FIFO buffer must have data in it
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // TODO learn about the three different dmpGet commands used here. Do we need them all? What do they do? an we call only 1?
-  // TODO Make counter to go into else logic to count how often the buffer is found empty. Why pin high but buffer empty?
-  // TODO Sometimes locks up right away. Why?
-  if(cntIMU >= tarIMU) // Check IMU timer 
+  if((millis() >= goIMU) && mpuInterrupt == true) 
   {
-    portENTER_CRITICAL(&dmpMUX); // Start coordinate ISR and main loop
-    cntIMU = 0; // Reset IMU counter
-    portEXIT_CRITICAL(&dmpMUX); // End coordinate ISR and loop    
-    if(mpuInterrupt == true) // DMP interrupt flag went high and has not been reset
-    {
-      if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer. 
-      {  
-        mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
-        mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
-        mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
-      } //if
-      else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
-      {
-        DMP_FIFO_data_missing_cnt++; // Track how many times the FIFO pin  goes high but the buffer is empty  
-      } //else
-      portENTER_CRITICAL(&dmpMUX); // Start coordinate ISR and main loop
-      mpuInterrupt = false; // Reset DMP data ready flag
-      portEXIT_CRITICAL(&dmpMUX); // End coordinate ISR and loop    
-    } //if
+    readIMU(); // Update the OLED with data
+    if(millis() >= goMETADATA) updateMetaData(ypr[0], ypr[1], ypr[2]); // Send data to serial terminal
   } //if
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Update serial with balance data when the time is right
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  UpdateSerial(ypr[0], ypr[1], ypr[2]); // Send data to serial terminal
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Update OLED with balance data when the time is right
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  if(cntOLED >= tarOLED) // Check OLED counter to see if it is time to send new data to the OLED
-  {
-    portENTER_CRITICAL_ISR(&timerMux); // Prevent ISR from updating variable while we are changing it
-    cntOLED = 0; // Reset OLED update counter  
-    portEXIT_CRITICAL_ISR(&timerMux); // Allow ISR access to variable again  
-    UpdateOLED(ypr[0], ypr[1], ypr[2]); // Send data to OLED
-  } //if
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Update MQTT when the time is right
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// TODO Add this back to use MQTT 
-  /* 
-  if(cntMQTT >= tarMQTT)
-  {
-    portENTER_CRITICAL_ISR(&timerMux); // Prevent ISR from updating variable while we are changing it
-    cntMQTT = 0; // Reset MQTT update counter  
-    portEXIT_CRITICAL_ISR(&timerMux); // Allow ISR access to variable again  
-    UpdateMQTT(ypr[0], ypr[1], ypr[2]); // Send data to MQTT broker    
-  } //if
-  */
-/*
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Ping MQTT broker to keep connection open. Only required of period between communicatins is more than KEEPALIVE value
-  /// @note Keepalive value shows in console at startup. Default is 5 min
-  /// if/when other MQTT communication is required.
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // TODO Add timer to track timeout of this and PING as needed.  Note required for balancing telemetry but may be needed
-  if(! mqtt.ping()) 
-  {
-    mqtt.disconnect();
-  } //if  
-*/
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Update MQTT when the time is right
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // TODO Handle this in seperate FreeRTOS thread, not here in the loop() function
-//  getMQTTcmd(); // Get command from MQTT broker 
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Blink LED to indicate activity
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  if(cntLED >= tarLED)
-  {
-    portENTER_CRITICAL_ISR(&timerMux); // Prevent ISR from updating variable while we are changing it
-    cntLED = 0; // Reset LED flashing counter  
-    portEXIT_CRITICAL_ISR(&timerMux); // Allow ISR access to variable again  
-    blinkState = !blinkState;
-    digitalWrite(gp_SWC_LED, blinkState);
-  } //if
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief Ensure that loop() always takes the same amount of time
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  loopDelay = 0; // reset counter 
-  while(currentMillis - previousMillis <= LOOP_INTERVAL) // If loop() has not taken long enough
-  {
-    loopDelay++;
-    currentMillis = millis(); // Increment current time variable until the full  intervaalhas passed
-  } // while
-  previousMillis = currentMillis; // Set new target time to now 
+  delay(100);
 } //loop()
