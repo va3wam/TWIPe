@@ -7,14 +7,12 @@ This project contains the embedded system code used for a Two Wheeled Inverted P
 
 There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) that has been created containing information common to all VA3WAM projects. Everything that you need to set up a VA3WAM compatable work space can be found in the wiki. Alternativey, you can follow the instructions and links below to set up your environment. Here are the high level steps needed to get started with your very own TWIPe robot:
 
-<ol>
-<li>Connect the robot to your computer via a USB cable</li>
-<li>Test the robot's circuit. Code and instructions [here](https://github.com/va3wam/TWIPeTest)</li>
-<li>Get the calibration values. Code and instructions [here](https://github.com/va3wam/TWIPeCalibrate)</li>
-<li>Load up the TWIPe code (with the updated offset values if you did that step)</li>
-<li>Put the robot face down parallel to the ground</li>
-<li>Let it boot up</li>
-</ol>
+1. Connect the robot to your computer via a USB cable
+2. Test the robot's circuit. Code and instructions [here](https://github.com/va3wam/TWIPeTest)
+3. Get the calibration values. Code and instructions [here](https://github.com/va3wam/TWIPeCalibrate)
+4. Load up the TWIPe code (with the updated offset values if you did that step)
+5. Put the robot face down parallel to the ground
+6. Let it boot up
 
 ### Prerequisites
 
@@ -24,8 +22,15 @@ The VA3WAM development environment used to make the code in this repository is d
 
 To get a copy of this project up and running on your local machine for development and testing purposes please follow these [instructions](https://github.com/va3wam/va3wam.github.io/wiki/Software-Version-Control).
 
+### Booting Up
+In order for the robot to balance properly you need to follow this boot up procedure:
+
+1. Lay the robot face down. THis is tricky with the control panel buttons and USB port so a jig may ne needed
+2. Boot up the robot. Wit until it is fully booted. Takes aboout a minute at most
+3. Slowly bring the robot to an upright position.
+
 ## Running the tests
-You may wish to test the robot circuit or test the code that runs on the circuit.
+You may wish to test the robot circuit or test the code that runs on the circuit. If you have trouble uploading code to the robot make sure that the GREEN reset button is in the out position. Turning the GREEN button on/off can sometimes help as well. 
 
 ### Test the Circuit
 To test the PCB please load [this](https://github.com/va3wam/TWIPeTest) code into your robot and then folllow the test instructions found in that repository. 
