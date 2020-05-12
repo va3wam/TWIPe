@@ -13,10 +13,10 @@
  * 0.0.2   2020-04-27 Special trimmed down build that just doe IMU output to the serial port
  * 0.0.1   2020-03-13 Program created
  *************************************************************************************************************************************/
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // TODO Add boot sequence that 1) checks Flash for config, or 2) asks MQTT for config, or 3) Uses default values in include file
 // TODO Add MQTT topic which is updated at boot up
 // TODO Fix bug where sometimes MQTT commands do not terminate and the command goes forever
+
 // Arduino libraries
 #include <Arduino.h> // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
 #include <WiFi.h> // Required to connect to WiFi network. Comes with Platform.io
@@ -1006,15 +1006,11 @@ void setupOLED()
  */
 void setupIMU()
 {
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief initialize device
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Initialize device
   AMDP_PRINTLN("<setupIMU> Initializing MPU6050...");
   mpu.initialize();
   pinMode(gp_IMU_INT, INPUT);
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief verify connection
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Verify connection
   AMDP_PRINTLN("<setupIMU> Testing MPU6050 connection...");
   bool tmp = mpu.testConnection();
   if(tmp == true)
@@ -1026,9 +1022,7 @@ void setupIMU()
     AMDP_PRINTLN("<setupIMU> MPU6050 connection failed. Halting boot up");
     while(1);
   } //else
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /// @brief load and configure the DMP
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Load and configure the DMP
   AMDP_PRINTLN(F("<setupIMU> Initializing DMP..."));
   devStatus = mpu.dmpInitialize();
   // make sure it worked (returns 0 if so)
