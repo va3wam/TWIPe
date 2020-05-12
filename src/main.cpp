@@ -17,7 +17,7 @@
 // TODO Add boot sequence that 1) checks Flash for config, or 2) asks MQTT for config, or 3) Uses default values in include file
 // TODO Add MQTT topic which is updated at boot up
 // TODO Fix bug where sometimes MQTT commands do not terminate and the command goes forever
-/// @brief Arduino libraries
+// Arduino libraries
 #include <Arduino.h> // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
 #include <WiFi.h> // Required to connect to WiFi network. Comes with Platform.io
 #include <I2Cdev.h> // For MPU6050 - https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/I2Cdev/I2Cdev.h
@@ -29,17 +29,17 @@
 #include <known_networks.h> // Defines Access points and passwords that the robot can scan for and connect to
 #include <AsyncMqttClient.h> // https://github.com/marvinroger/async-mqtt-client
 
-/// @brief FreeRTOS libraries  
+// FreeRTOS libraries  
 #include "freertos/FreeRTOS.h" // Required for threads that control wifi and mqtt connections
 #include "freertos/timers.h" // Required for xTimerCreate function used for controlling wifi and mqtt connections
 #include <freertos/event_groups.h> // Required to use the FreeRTOS function xEventGroupSetBits. Used for motor driver control
 #include <freertos/queue.h> // Required to use FreeRTOS the function uxQueueMessagesWaiting. Used for motor driver control
 
-/// @brief Precompiler directives for debug output 
+// Precompiler directives for debug output 
 #define DEBUG true // Turn debug tracing on/off
 #define DMP_TRACE false // Set to TRUE or FALSE to toggle DMP memory read/write activity
 
-/// @brief Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
+// Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
 #if DEBUG == true
     #define AMDP_PRINT(x) Serial.print(x)
     #define AMDP_PRINTLN(x) Serial.println(x)
@@ -48,14 +48,14 @@
     #define AMDP_PRINTLN(x)
 #endif
 
-/// @brief Define which core the Arduino environment is running on
+// Define which core the Arduino environment is running on
 #if CONFIG_FREERTOS_UNICORE // If this is an SOC with only 1 core
   #define ARDUINO_RUNNING_CORE 0 // Arduino is running on that one core
 #else // If this is an SOC with more than one core (2 is the ony other option at ths point)
   #define ARDUINO_RUNNING_CORE 1 // Arduino is running on the second core
 #endif
 
-/// @brief Define robot specific global parameters 
+// Define robot specific global parameters 
 int16_t XGyroOffset; // Gyroscope x axis (Roll)
 int16_t YGyroOffset; // Gyroscope y axis (Pitch)
 int16_t ZGyroOffset; // Gyroscope z axis (Yaw)
@@ -68,15 +68,14 @@ int stepsPerRevolution; // How many steps our motors need to take to do one comp
 float distancePerStep; // How far our robot moves per step
 float heightCOM = 5; // How far it is from the ground to the Centre Of Mass of the robot
 
-/// @brief Define OLED constants, classes and global variables 
+// Define OLED constants, classes and global variables 
 SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
 
-/// @brief Define LED constants, classes and global variables 
+// Define LED constants, classes and global variables 
 bool blinkState = false;
 
-/// @brief Define MPU6050 constants, classes and global variables 
-/// @note We are using Yaw/Pitch/Roll which suggers from gimble lock
-/// @link http://en.wikipedia.org/wiki/Gimbal_lock) 
+// Define MPU6050 constants, classes and global variables 
+// Note that we are using Yaw/Pitch/Roll which suggers from gimble lock http://en.wikipedia.org/wiki/Gimbal_lock 
 MPU6050 mpu; // GY521 default I2C address
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
@@ -94,7 +93,7 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 portMUX_TYPE dmpMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize variables between the DMP data ready ISR and loop()
 volatile bool mpuInterrupt = false; // indicates whether MPU interrupt pin has gone high
 
-/// @brief Define global WiFi network information 
+// Define global WiFi network information 
 const char* mySSID = "NOTHING";
 const char* myPassword =  "NOTHING";
 String myMACaddress; // MAC address of this SOC. Used to uniquely identify this robot 
@@ -106,10 +105,10 @@ WiFiClient client; // Create an ESP32 WiFiClient class to connect to the MQTT se
 TimerHandle_t wifiReconnectTimer; // Reference to FreeRTOS timer used for restarting wifi
 int wifiCurrConAttemptsCnt = 0; // Number of Acess Point connection attempts made during current connection effort
 
-/// @brief Define MQTT constants, classes and global variables. 
-/// @note MQTT broker used for testing this was Mosquitto running on a Raspberry Pi
-/// @note sends balance telemetry data to <device name><telemetry/balance> 
-/// @note listens for commands on <device name><commands>
+// Define MQTT constants, classes and global variables. 
+// Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
+// Note sends balance telemetry data to <device name><telemetry/balance> 
+// Note listens for commands on <device name><commands>
 #define MQTT_BROKER_IP "192.168.2.106" // Need to make this a fixed IP address
 #define MQTT_BROKER_PORT 1883 // Use 8883 for SSL
 #define MQTT_USERNAME "NULL" // Not used at this time. To do: secure MQTT broker
@@ -124,7 +123,7 @@ String cmdTopicMQTT = "NOTHING"; // Full path to incoming command topic from MQT
 String balTopicMQTT = "NOTHING"; // Full path to outgoing balance telemetry topic to MQTT broker 
 String metTopicMQTT = "NOTHING"; // Full path to outgoing metadata topic to MQTT broker
 
-/// @brief Define global motor control variables and structures. Also define pointers and muxing for multitasking motors via ISRs
+// Define global motor control variables and structures. Also define pointers and muxing for multitasking motors via ISRs
 #define motorISRus 20 // Number of microseconds between motor ISR calls 
 hw_timer_t * rightMotorTimer = NULL; // Pointer to right motor ISR
 hw_timer_t * leftMotorTimer = NULL; // Pointer to left motor ISR
@@ -147,7 +146,7 @@ typedef struct
 } motor; // Array for the two stepper motors that drive the robot
  static volatile motor stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
 
-/// @brief Define global control variables.  
+// Define global control variables.  
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)  
 #define tmrIMU 200 // Milliseconds to wait between reading data to IMU over I2C
 #define tmrOLED 200 // Milliseconds to wait between sending data to OLED over I2C
@@ -161,7 +160,7 @@ int goLED = 0; // Target time for next toggle of LED
 boolean sendMetaDataToMQTT = false; // Used to decide if metadata about the code shoud go to MQTT broker or serial port
 boolean sendBalanceToMQTT = false; // Used to decide if balance telemetry data should be sent to the MQTT broker
 
-/// @brief Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment. 
+// Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment. 
 int wifiConAttemptsCnt = 0; // Track the number of over all attempts made to connect to the WiFi Access Point
 int mqttConAttemptsCnt = 0; // Track the number of attempts made to connect to the MQTT broker 
 int dmpFifoDataMissingCnt = 0; // Track how many times the FIFO pin goes high but the buffer is empty 
@@ -172,14 +171,15 @@ int unknownCmdCnt = 0; // Track how many unknown command have been recieved
 int leftDRVfault = 0; // Track how many times the left DVR8825 motor driver signals a fault
 int rightDRVfault = 0; // Track how many times the right DVR8825 motor driver signals a fault
 
-/// @brief Define flags that are used to track what devices/functions are verified working after start up. Initilize false.  
+// Define flags that are used to track what devices/functions are verified working after start up. Initilize false.  
 boolean leftOLED_detected = false;
 boolean rightOLED_detected = false;
 boolean LCD_detected = false;
 boolean MPU6050_detected = false;
 boolean wifi_connected = false;
 
-/** @brief Interrupt Service Routine (ISR) that runs when the DMP firmware on the MPU6050 raises its interrupt pin indicating that it
+/** 
+ * @brief Interrupt Service Routine (ISR) that runs when the DMP firmware on the MPU6050 raises its interrupt pin indicating that it
  * has data in its FIFO buffer ready to be read over I2C 
  * @note This function is not placed in IRAM 
  */
@@ -191,7 +191,8 @@ void dmpDataReady()
   portEXIT_CRITICAL(&dmpMUX); // Allow loop() access to variable again
 } //dmpDataReady()
 
-/** @brief Strips the colons off the MAC address of this device
+/** 
+ * @brief Strips the colons off the MAC address of this device
  * @return String
  */
 String formatMAC()
@@ -331,9 +332,9 @@ String ipToString(IPAddress ip)
     return s;
 } //ipToString()
 
-/*************************************************************************************************************************************
+/**
  * @brief Connect to WiFi Access Point 
- *************************************************************************************************************************************/
+ */
 void connectToWifi() 
 {
   wifiConAttemptsCnt ++; // Increment the number of attempts made to connect to the Access Point 
@@ -343,11 +344,11 @@ void connectToWifi()
   WiFi.begin(mySSID, myPassword);
 } //connectToWifi()
 
-/*************************************************************************************************************************************
+/**
  * @brief Connect to MQTT broker
  * @note MQTT Spec: https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718063
  * @note Reference for MQTT comments in this code: https://www.hivemq.com/mqtt-essentials/
- *************************************************************************************************************************************/
+ */
 void connectToMqtt() 
 {
   AMDP_PRINTLN("<connectToMqtt> Connecting to MQTT...");
@@ -355,14 +356,14 @@ void connectToMqtt()
   mqttConAttemptsCnt ++; // Increment the number of attempts made to connect to the MQTT broker 
 } //connectToMqtt()
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle all WiFi events
  * @param event WiFi event that caused this function to be called
  * # WiFi Event Handling
  * All Wifi events are processed by the WiFiEvent method. A list of the events appears in the table below.
  * 
  * ## Table of WiFi Events
-* | Return Code | Constant Directive | Description                                                       |  
+ * | Return Code | Constant Directive | Description                                                      |  
  * |:-----------:|:--------------------------------------------------------------------------------------|
  * | 0  | SYSTEM_EVENT_WIFI_READY | WiFi ready |
  * | 1  | SYSTEM_EVENT_SCAN_DONE | finish scanning AP |
@@ -390,7 +391,7 @@ void connectToMqtt()
  * | 23 | SYSTEM_EVENT_ETH_DISCONNECTED | ethernet phy link down |
  * | 24 | SYSTEM_EVENT_ETH_GOT_IP | ethernet got IP from connected AP |
  * | 25 | SYSTEM_EVENT_MAX | |
- *************************************************************************************************************************************/
+ */
 void WiFiEvent(WiFiEvent_t event) 
 {
   String tmpHostNameVar; // Hold WiFi host name created in this function
@@ -457,7 +458,7 @@ void WiFiEvent(WiFiEvent_t event)
   } //switch
 } //WiFiEvent(WiFiEvent_t event)
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle CONNACK from the MQTT broker
  * @param sessionPresent persitent session available flag contained in CONNACK message from MQTT broker.
  * # CONNACK Message
@@ -485,7 +486,7 @@ void WiFiEvent(WiFiEvent_t event)
  * |  3  | Connection refused, server unavailable |
  * |  4  | Connection refused, bad user name or password |
  * |  5  | Connection refused, not authorized |
- *************************************************************************************************************************************/
+ */
 void onMqttConnect(bool sessionPresent) 
 {
   AMDP_PRINTLN("<onMqttConnect> Connected to MQTT");
@@ -498,10 +499,10 @@ void onMqttConnect(bool sessionPresent)
   Serial.println(packetIdSub);
 } //onMqttConnect()
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle disconnecting from an MQTT broker
  * @param reason Reason for disconnect
- *************************************************************************************************************************************/
+ */
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) 
 {
   AMDP_PRINTLN("<onMqttDisconnect> Disconnected from MQTT");
@@ -514,7 +515,7 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
   mqttConAttemptsCnt = 0; // Reset the number of attempts made to connect to the MQTT broker 
 } //onMqttDisconnect()
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle SUBACK from MQTT broker
  * @param packetId Unique identifier of the message
  * @param qos SUBACK return code
@@ -537,7 +538,7 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
  * |  1  |  Success - Maximum QoS 1 |
  * |  2  |  Success - Maximum QoS 2 |
  * | 128 |  Failure |
- *************************************************************************************************************************************/
+ */
 void onMqttSubscribe(uint16_t packetId, uint8_t qos) 
 {
   AMDP_PRINTLN("<onMqttSubscribe> Subscribe acknowledged by broker.");
@@ -547,14 +548,14 @@ void onMqttSubscribe(uint16_t packetId, uint8_t qos)
   AMDP_PRINTLN(qos);
 } //onMqttSubscribe
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle UNSUBACK message from MQTT broker
  * @param packetId Unique identifier of the message. This is the same packet identifier that is in the UNSUBSCRIBE message.
  * # UNSUBACK Message
  * To confirm the unsubscribe, the broker sends an UNSUBACK acknowledgement message to the client. This message contains only the 
  * packet identifier of the original UNSUBSCRIBE message (to clearly identify the message). After receiving the UNSUBACK from the 
  * broker, the client can assume that the subscriptions in the UNSUBSCRIBE message are deleted.
- *************************************************************************************************************************************/
+ */
 void onMqttUnsubscribe(uint16_t packetId) 
 {
   AMDP_PRINTLN("Unsubscribe acknowledged.");
@@ -562,7 +563,7 @@ void onMqttUnsubscribe(uint16_t packetId)
   AMDP_PRINTLN(packetId);
 } //onMqttUnsubscribe()
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle incoming messages from MQTT broker for topics subscribed to
  * @param topic Which topic this message if about
  * @param payload The content of the message sent from the MQTT broker
@@ -581,7 +582,21 @@ void onMqttUnsubscribe(uint16_t packetId)
  * ## DUP flag 
  * Boolean value indicates that the message is a duplicate and was resent because the intended recipient (client or broker) did not 
  * acknowledge the original message. This is only relevant for QoS greater than 0.
- *************************************************************************************************************************************/
+ * 
+ * # Commands
+ * When WiFi is available and  there is an MQTT broker availabe, TWIPe is always subscibed to the topic {robot name}/commands. All
+ * incoming messages from that topic are checked against a known list of commands and get processed accordingly. Commands that are
+ * not recognized get logged and ignored.
+ * 
+ * ## Table of Known Commands
+ * | Command                | Description                                                                                            |
+ * |:-----------------------|:-------------------------------------------------------------------------------------------------------|
+ * | balTelON               | Causes balance telemetry data to be published to the MQTT broker topic {robot name}/telemetry/balance  |  
+ * | balTelOFF              | Causes balance telemetry data to stop being published to the MQTT broker |  
+ * | metaDataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
+ * | metaDataOFF            | Causes metadata to stop being published to the MQTT broker |  
+ * | motor,num,steps,delay  | Manual motor control. Use +/- step values for direction | * 
+ */
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) 
 {
   AMDP_PRINT("<onMqttMessage> Publish received.");
@@ -601,20 +616,6 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   AMDP_PRINTLN(total);
   AMDP_PRINT("<onMqttMessage>  payload: ");
   AMDP_PRINTLN(payload);
-
-  /// @brief Look at the incoming command and decide what to do with it 
-  /// # Commands
-  /// When WiFi is available and  there is an MQTT broker availabe, TWIPe is always subscibed to the topic {robot name}/commands. All
-  /// incoming messages from that topic are checked against a known list of commands and get processed accordingly. Commands that are
-  /// not recognized get logged and ignored.
-  ///  ## Table of Known Commands
-  /// | Command                | Description                                                                                            |
-  /// |:-----------------------|:-------------------------------------------------------------------------------------------------------|
-  /// | balTelON               | Causes balance telemetry data to be published to the MQTT broker topic {robot name}/telemetry/balance  |  
-  /// | balTelOFF              | Causes balance telemetry data to stop being published to the MQTT broker |  
-  /// | metaDataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
-  /// | metaDataOFF            | Causes metadata to stop being published to the MQTT broker |  
-  /// | motor,num,steps,delay  | Manual motor control. Use +/- step values for direction |
   String tmp = String(payload).substring(0,len);
   AMDP_PRINT("<onMqttMessage> Message to process = ");
   AMDP_PRINTLN(tmp);
@@ -681,10 +682,10 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   } //else
 } //onMqttMessage()
 
-/*************************************************************************************************************************************
+/**
  * @brief Handle the reciept of a PUBACK message message from MQTT broker
  * @param packetId Unique identifier of the message.
- *************************************************************************************************************************************/
+ */
 void onMqttPublish(uint16_t packetId) 
 {
   AMDP_PRINTLN("Publish acknowledged.");
@@ -692,9 +693,9 @@ void onMqttPublish(uint16_t packetId)
   AMDP_PRINTLN(packetId);
 } //onMqttPublish()
 
-/*************************************************************************************************************************************
- This function returns a String version of the local IP address.
- *************************************************************************************************************************************/
+/**
+ * @brief Manage multiple attempts to connect to the WiFi network  
+ */
 void connectToNetwork() 
 {
   int maxConnectionAttempts = 20; // Maximum number of Access Point connection attemts 
@@ -718,10 +719,10 @@ void connectToNetwork()
   } //if
 } //connectToNetwork() 
 
-/*************************************************************************************************************************************
+/**
  * @brief This function translates the type of encryption that an Access Point (AP) advertises (an an ENUM) 
  * and returns a more human readable description of what that encryption method is.
- *************************************************************************************************************************************/
+ */
 String translateEncryptionType(wifi_auth_mode_t encryptionType) 
 {
   switch (encryptionType) 
@@ -743,10 +744,10 @@ String translateEncryptionType(wifi_auth_mode_t encryptionType)
   } //switch
 } //translateEncryptionType()
 
-/*************************************************************************************************************************************
+/**
  * @brief This function scans the WiFi spectrum looking for Access Points (AP). It selects the AP with the 
  * strongest signal which is included in the known network list.
- *************************************************************************************************************************************/
+ */
 void scanNetworks() 
 {
   int numberOfNetworks = WiFi.scanNetworks(); // Used to track how many APs are detected by the scan
@@ -799,12 +800,12 @@ void scanNetworks()
   AMDP_PRINTLN(mySSID);
 } //scanNetworks()
 
-/*************************************************************************************************************************************
+/**
  * @brief Print leading zeros for a binary number
  * @note Code taken from Peter H Anderson example
  * @arg int8_t v = number to dispay
  * @arg int8_t num_places = number of bits to display (normally a multile of 8)
- *************************************************************************************************************************************/
+ */
 void printBinary(byte v, int8_t num_places)
 {
   int8_t mask=0, n;
@@ -831,7 +832,7 @@ void printBinary(byte v, int8_t num_places)
   } //while
 } //printBinary()
 
-/*************************************************************************************************************************************
+/**
  * @brief Publish a message to the specified MQTT broker topic tree
  * @param topic The topic tree to publish the messge to
  * @param msg The message to send
@@ -845,7 +846,7 @@ void printBinary(byte v, int8_t num_places)
  * |:-----------------------|:---------------------------------|:--------------------------------------------------------------------|
  * | Balance telemetry      | {robot name}/telemetry/balance   | Angle of IMU orientation in degrees                                 |
  * | Robot Metadata         | {robot name}/metadata            | See metadata table for a full list of the data points being tracked |
- *************************************************************************************************************************************/
+ */
 void publishMQTT(String topic, String msg) 
 {
   char tmp[NUMBER_OF_MILLI_DIGITS];
@@ -870,18 +871,18 @@ void publishMQTT(String topic, String msg)
   } //else
 } //publishMQTT()
 
-/*************************************************************************************************************************************
+/**
  * @brief Calculate angle and reformat result of calculation from float to String to pass along to publishMQTT() 
  * @param angle Angle of robot lean in eulers. To convert to degrees use this formula: degrees = angle * 180 / PI
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
- *************************************************************************************************************************************/
+ */
 void formatBalanceData(float angle)
 {      
   publishMQTT("balance", String(angle * 180 / PI));
 } //formatBalanceData()
 
-/*************************************************************************************************************************************
+/**
  * @brief Send updated metadata about the running of the code.
  * # Metadata
  * There are a number of data points that the TWIPe code tracks in order to assess how the robot's logic is performing. These data 
@@ -902,7 +903,7 @@ void formatBalanceData(float angle)
  * | Unknown command          | Number of unrecognized commands have been recieved. |
  * | Left DRV8825 fault       | Number of fault signals sent by the left DVR8825 stepper motor driver |
  * | Right DRV8825 fault      | Number of fault signals sent by the right DVR8825 stepper motor driver |
- *************************************************************************************************************************************/
+ */
 void updateMetaData()
 {
   String tmp = String(wifiConAttemptsCnt);
@@ -927,12 +928,12 @@ void updateMetaData()
   goMETADATA = millis() + tmrMETADATA; // Reset SERIAL update target time
 } // updateMetaData()
 
-/*************************************************************************************************************************************
+/**
  * @brief Update OLED dipsplay 
  * @param angle Angle of robot lean in eulers. To convert to degrees use this formula: degrees = angle * 180 / PI
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
- *************************************************************************************************************************************/
+ */
 void updateOLED(float angle)
 {
   rightOLED.clear();        
@@ -941,20 +942,20 @@ void updateOLED(float angle)
   goOLED = millis() + tmrOLED; // Reset OLED update target time
 } //UpdateOLED()
 
-/*************************************************************************************************************************************
+/**
  * @brief Set up a WiFi connection
- *************************************************************************************************************************************/
+ */
 void setupWiFi()
 {
   scanNetworks();
   connectToNetwork(); 
 } // setupWiFi()
 
-/*************************************************************************************************************************************
+/**
  * @brief Function called when a message appears on the command topic subsription 
  * @param topic 
  * @param message 
- *************************************************************************************************************************************/
+ */
 void subscribed_callback(char *data, uint16_t len)
 {
   // Print out topic name and message
@@ -962,10 +963,10 @@ void subscribed_callback(char *data, uint16_t len)
   AMDP_PRINTLN(data);
 } //subscribed_callback
 
-/*************************************************************************************************************************************
+/**
  * @brief Set up communication with an MQTT broker
  * Refer to: https://learn.adafruit.com/introducing-the-adafruit-wiced-feather-wifi/adafruitmqtt
- *************************************************************************************************************************************/
+ */
 void setupMQTT()
 {
   mqttClient.onConnect(onMqttConnect);
@@ -977,18 +978,18 @@ void setupMQTT()
   mqttClient.setServer(MQTT_BROKER_IP, MQTT_BROKER_PORT);
 } //setupMQTT()
 
-/*************************************************************************************************************************************
+/**
  * @brief Set up the LED that is flashed by loop()
- *************************************************************************************************************************************/
+ */
 void setupLED()
 {
   AMDP_PRINTLN("<setupLED> Enable LED pin");
   pinMode(gp_SWC_LED, OUTPUT); // configure LED for output
 } //setupLED()
 
-/*************************************************************************************************************************************
+/**
  * @brief Set up the OLED 
- *************************************************************************************************************************************/
+ */
 void setupOLED()
 {
   AMDP_PRINTLN("<setupOLED> Initialize OLED");
@@ -1000,9 +1001,9 @@ void setupOLED()
   AMDP_PRINTLN("<setupOLED> Initialization of OLED complete");
 } //setupOLED()
 
-/*************************************************************************************************************************************
+/**
  * @brief Set up the MPU6050 using DMP firmware and interrupts
- *************************************************************************************************************************************/
+ */
 void setupIMU()
 {
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
