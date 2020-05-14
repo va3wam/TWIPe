@@ -2,13 +2,15 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.3
+ * @version 0.0.4
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.4   2020-05-14 Added structure to track physical attributes of robot as well as the function setBalanceDistance() which accepts
+ *                    and angle and uses it to set the motor tripDistance in steps to try and balance the robot. 
  * 0.0.3   2020-05-12 Added manual motor control via MQTT
  * 0.0.2   2020-04-27 Special trimmed down build that just doe IMU output to the serial port
  * 0.0.1   2020-03-13 Program created
@@ -62,11 +64,20 @@ int16_t ZGyroOffset; // Gyroscope z axis (Yaw)
 int16_t XAccelOffset; // Accelerometer x axis
 int16_t YAccelOffset; // Accelerometer y axis
 int16_t ZAccelOffset; // Accelerometer z axis
-float wheelDiameter; // Diameter of wheel 
-float wheelCircumference; // Diameter x pi
-int stepsPerRevolution; // How many steps our motors need to take to do one complete revolution
-float distancePerStep; // How far our robot moves per step
-float heightCOM = 5; // How far it is from the ground to the Centre Of Mass of the robot
+//float wheelDiameter; // Diameter of wheel 
+//float wheelCircumference; // Diameter x pi
+//int stepsPerRevolution; // How many steps our motors need to take to do one complete revolution
+//float distancePerStep; // How far our robot moves per step
+//float heightCOM = 5; // How far it is from the ground to the Centre Of Mass of the robot
+// Define global variables about the robot's physical characteristics
+typedef struct
+{
+  float heightCOM = 0; // Height from ground to Center Of  Mass of robot in inches
+  float wheelDiameter = 0; // Diameter of drive wheels in inches
+  float wheelCircumference; // Diameter x pi 
+  float distancePerStep = 0; // Distance travelled per step of motor in inches
+} physicalAttributes; // Array for the two stepper motors that drive the robot
+ static volatile physicalAttributes robot; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
 
 // Define OLED constants, classes and global variables 
 SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
@@ -125,6 +136,8 @@ String metTopicMQTT = "NOTHING"; // Full path to outgoing metadata topic to MQTT
 
 // Define global motor control variables and structures. Also define pointers and muxing for multitasking motors via ISRs
 #define motorISRus 20 // Number of microseconds between motor ISR calls 
+#define RIGHT_MOTOR 0 // Index value of right motor array
+#define LEFT_MOTOR 1 // Index value of right motor array
 hw_timer_t * rightMotorTimer = NULL; // Pointer to right motor ISR
 hw_timer_t * leftMotorTimer = NULL; // Pointer to left motor ISR
 portMUX_TYPE leftMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left motor variable access between ISR and main program thread
@@ -143,6 +156,7 @@ typedef struct
   int motorDelay = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
   int tripDistance = 0; // Current distance to travel
   int tripOdometer = 0; // Current distance travelled toward trip distance
+  int stepsPerRev = 0;
 } motor; // Array for the two stepper motors that drive the robot
  static volatile motor stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
 
@@ -295,8 +309,25 @@ void IRAM_ATTR leftMotorTimerISR()
 } //leftMotorTimerISR()
 
 /**
+ * @brief Set the number of steps the motors must take to get center of mass  at 90 degrees to ground
+ * @param angle // Angle robot is leaning. Use polarity to indicate forward/backward
+ */
+void setBalanceDistance(float angle)
+{
+  int distance = (tan(angle * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
+  int steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
+  // Update distance to travel for right motor
+  portENTER_CRITICAL_ISR(&rightMotorTimerMux);
+  stepperMotor[RIGHT_MOTOR].tripDistance = steps;
+  portEXIT_CRITICAL_ISR(&rightMotorTimerMux);    
+  // Update distance to travel for left motor
+  portENTER_CRITICAL_ISR(&leftMotorTimerMux);
+  stepperMotor[LEFT_MOTOR].tripDistance = steps;
+  portEXIT_CRITICAL_ISR(&leftMotorTimerMux);    
+} // setBalanceDistance
+
+/**
  * @brief ISR for left DRV8825 fault condition
- * 
  */
 void IRAM_ATTR leftDRV8825fault() 
 {
@@ -1094,9 +1125,10 @@ void cfgByMAC()
     XAccelOffset = -3396;
     YAccelOffset = 830;
     ZAccelOffset = 1890;  
-    wheelDiameter = 3.75; 
-    stepsPerRevolution = 200;
-    heightCOM = 5;
+    robot.heightCOM = 5;
+    robot.wheelDiameter = 3.75;
+    stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
+    stepperMotor[LEFT_MOTOR].stepsPerRev = 200; 
   } //if
   else if(myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
   {
@@ -1107,9 +1139,10 @@ void cfgByMAC()
     XAccelOffset = -2070;
     YAccelOffset = -70;
     ZAccelOffset = 1641;      
-    wheelDiameter = 3.75; 
-    stepsPerRevolution = 200;
-    heightCOM = 5;
+    robot.heightCOM = 5;
+    robot.wheelDiameter = 3.75;
+    stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
+    stepperMotor[LEFT_MOTOR].stepsPerRev = 200;
   } //else if
   else
   {
@@ -1120,14 +1153,17 @@ void cfgByMAC()
     XAccelOffset = -3396;
     YAccelOffset = 830;
     ZAccelOffset = 1890;      
-    wheelDiameter = 3.75; 
-    stepsPerRevolution = 200;
-    heightCOM = 5;
+    robot.heightCOM = 5;
+    robot.wheelDiameter = 3.75;
+    stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
+    stepperMotor[LEFT_MOTOR].stepsPerRev = 200;
   } //else
-  wheelCircumference = wheelDiameter * PI; 
-  distancePerStep = wheelCircumference / stepsPerRevolution;
-  Serial.print("<cfgByMAC> Distance per step = ");
-  Serial.println(distancePerStep);
+  robot.wheelCircumference = robot.wheelDiameter * PI; 
+  robot.distancePerStep = robot.wheelCircumference / stepperMotor[RIGHT_MOTOR].stepsPerRev;
+  AMDP_PRINT("<cfgByMAC> Wheel circumference = ");
+  AMDP_PRINTLN(robot.wheelCircumference);
+  AMDP_PRINT("<cfgByMAC> Distance per step = ");
+  AMDP_PRINTLN(robot.distancePerStep);
 } //cfgByMAC()
 
 /**
