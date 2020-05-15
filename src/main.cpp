@@ -120,7 +120,7 @@ int wifiCurrConAttemptsCnt = 0; // Number of Acess Point connection attempts mad
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
 // Note sends balance telemetry data to <device name><telemetry/balance> 
 // Note listens for commands on <device name><commands>
-#define MQTT_BROKER_IP "192.168.2.106" // Need to make this a fixed IP address
+#define MQTT_BROKER_IP "192.168.2.21" // Need to make this a fixed IP address
 #define MQTT_BROKER_PORT 1883 // Use 8883 for SSL
 #define MQTT_USERNAME "NULL" // Not used at this time. To do: secure MQTT broker
 #define MQTT_KEY "NULL" // Not used at this time. To do: secure MQTT broker
