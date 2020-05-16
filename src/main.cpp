@@ -2,13 +2,14 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.4
+ * @version 0.0.5
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.5   2020-05-16 Reset odometer value in setBalanceDistance()
  * 0.0.4   2020-05-14 Added structure to track physical attributes of robot as well as the function setBalanceDistance() which accepts
  *                    and angle and uses it to set the motor tripDistance in steps to try and balance the robot. 
  * 0.0.3   2020-05-12 Added manual motor control via MQTT
@@ -319,10 +320,12 @@ void setBalanceDistance(float angle)
   // Update distance to travel for right motor
   portENTER_CRITICAL_ISR(&rightMotorTimerMux);
   stepperMotor[RIGHT_MOTOR].tripDistance = steps;
+  stepperMotor[RIGHT_MOTOR].tripOdometer = 0;
   portEXIT_CRITICAL_ISR(&rightMotorTimerMux);    
   // Update distance to travel for left motor
   portENTER_CRITICAL_ISR(&leftMotorTimerMux);
   stepperMotor[LEFT_MOTOR].tripDistance = steps;
+  stepperMotor[LEFT_MOTOR].tripOdometer = 0;
   portEXIT_CRITICAL_ISR(&leftMotorTimerMux);    
 } // setBalanceDistance
 
