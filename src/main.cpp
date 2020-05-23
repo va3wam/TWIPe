@@ -9,6 +9,11 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.6   2020-05-23 DAE: make Wifi startup more robust by calling connectToWifi after certain errors
+ *                    Make Wifi event handler just store the event for loop() to process at background level
+ *                    Temporarily disable timer that calls connectToWifi() in handling of STA_DISCONNECTED event
+ *                      to avoid it running asynchronously to other code. It also needs same retry logic that
+ *                      connectToNetwork() has.
  * 0.0.5   2020-05-16 Reset odometer value in setBalanceDistance()
  * 0.0.4   2020-05-14 Added structure to track physical attributes of robot as well as the function setBalanceDistance() which accepts
  *                    and angle and uses it to set the motor tripDistance in steps to try and balance the robot. 
@@ -116,6 +121,8 @@ String myHostNameSuffix = "Twipe"; // Suffix to add to WiFi host name for this r
 WiFiClient client; // Create an ESP32 WiFiClient class to connect to the MQTT server
 TimerHandle_t wifiReconnectTimer; // Reference to FreeRTOS timer used for restarting wifi
 int wifiCurrConAttemptsCnt = 0; // Number of Acess Point connection attempts made during current connection effort
+int WifiLastEvent = -1;         // last seen Wifi event, that needs to be handled in loop()
+                                // 0 = Wifi ready, 4 = connected, 5 = disconnected, 7 = got IP address
 
 // Define MQTT constants, classes and global variables. 
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
@@ -395,6 +402,7 @@ void connectToMqtt()
  * @param event WiFi event that caused this function to be called
  * # WiFi Event Handling
  * All Wifi events are processed by the WiFiEvent method. A list of the events appears in the table below.
+ * Events preceded by a ">" are common, and have been seen in TWIPe debug logs
  * 
  * ## Table of WiFi Events
  * | Return Code | Constant Directive | Description                                                      |  
@@ -403,10 +411,10 @@ void connectToMqtt()
  * | 1  | SYSTEM_EVENT_SCAN_DONE | finish scanning AP |
  * | 2  | SYSTEM_EVENT_STA_START | station start |
  * | 3  | SYSTEM_EVENT_STA_STOP | station stop |
- * | 4  | SYSTEM_EVENT_STA_CONNECTED | station connected to AP |
- * | 5  | SYSTEM_EVENT_STA_DISCONNECTED | station disconnected from AP |
+ * > 4  | SYSTEM_EVENT_STA_CONNECTED | station connected to AP |
+ * > 5  | SYSTEM_EVENT_STA_DISCONNECTED | station disconnected from AP |
  * | 6  | SYSTEM_EVENT_STA_AUTHMODE_CHANGE | the auth mode of AP connected by ESP32 station changed |
- * | 7  | SYSTEM_EVENT_STA_GOT_IP | station got IP from connected AP |
+ * > 7  | SYSTEM_EVENT_STA_GOT_IP | station got IP from connected AP |
  * | 8  | SYSTEM_EVENT_STA_LOST_IP | station lost IP and the IP is reset to 0 |
  * | 9  | SYSTEM_EVENT_STA_WPS_ER_SUCCESS | station wps succeeds in enrollee mode |
  * | 10 | SYSTEM_EVENT_STA_WPS_ER_FAILED | station wps fails in enrollee mode |
@@ -425,9 +433,38 @@ void connectToMqtt()
  * | 23 | SYSTEM_EVENT_ETH_DISCONNECTED | ethernet phy link down |
  * | 24 | SYSTEM_EVENT_ETH_GOT_IP | ethernet got IP from connected AP |
  * | 25 | SYSTEM_EVENT_MAX | |
- */
+ * 
+ * 
+ * Values for WifiStatus()
+ * Events preceded by a ">" are common, and have been seen in TWIPe debug logs
+ * ---------------------------
+ * |255| WL_NO_SHIELD	255
+ * > 0 | WL_IDLE_STATUS	0
+ * > 1 | WL_NO_SSID_AVAIL	1
+ * | 2 | WL_SCAN_COMPLETED	2
+ * > 3 | WL_CONNECTED	3
+ * > 4 | WL_CONNECT_FAILED	4
+ * > 5 | WL_CONNECTION_LOST	5
+ * > 6 | WL_DISCONNECTED	6
+ * 
+ * */
 void WiFiEvent(WiFiEvent_t event) 
 {
+  AMDP_PRINT("<WifiEvent> saw event number: ");
+  AMDP_PRINTLN(event);
+  if(WifiLastEvent != -1)
+     {AMDP_PRINT("<WiFiEvent> ********* Overwrote an unprocessed event *********  ");
+      AMDP_PRINT(WifiLastEvent);
+      AMDP_PRINT(" was replaced by: ");
+      AMDP_PRINTLN(event);
+     }
+  WifiLastEvent = event;                    // remember what event it was, and signal loop() to process it
+}
+
+void processWifiEvent()                    // called fron loop() to handle event ID stored in WifiLastEvent
+{
+  int event = WifiLastEvent;                    // retrieve last event that occurred
+  WifiLastEvent = -1;                       // and say that we've processed it
   String tmpHostNameVar; // Hold WiFi host name created in this function
   AMDP_PRINT("<WiFiEvent> event:");  
   AMDP_PRINTLN(event);
@@ -441,9 +478,9 @@ void WiFiEvent(WiFiEvent_t event)
     case SYSTEM_EVENT_STA_DISCONNECTED:
     {
       AMDP_PRINTLN("<WiFiEvent> Lost WiFi connection");
-      int blockTime  = 10; // https://www.freertos.org/FreeRTOS-timers-xTimerStart.html
-      xTimerStop(mqttReconnectTimer, blockTime); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi. Disconnect triggers new connect atempt
-      xTimerStart(wifiReconnectTimer, blockTime); // Activate wifi timer (which only runs 1 time)
+//      int blockTime  = 10; // https://www.freertos.org/FreeRTOS-timers-xTimerStart.html
+//      xTimerStop(mqttReconnectTimer, blockTime); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi. Disconnect triggers new connect atempt
+//      xTimerStart(wifiReconnectTimer, blockTime); // Activate wifi timer (which only runs 1 time)
       wifi_connected = false;
       wifiDropCnt ++; // Increment the number of network drops that have occured
       break;      
@@ -490,7 +527,7 @@ void WiFiEvent(WiFiEvent_t event)
       AMDP_PRINTLN(event);
     } //default
   } //switch
-} //WiFiEvent(WiFiEvent_t event)
+} // processWifiEvent
 
 /**
  * @brief Handle CONNACK from the MQTT broker
@@ -739,11 +776,19 @@ void connectToNetwork()
   AMDP_PRINTLN(mySSID);
   WiFi.onEvent(WiFiEvent); // Create a WiFi event handler
   connectToWifi();
+  delay(1000);                     // give it some time to establish the connection
   while ((WiFi.status() != WL_CONNECTED) && (maxConnectionAttempts > 0)) 
   {
-    delay(1000);
-    AMDP_PRINT("<connectToNetwork> Establishing connection to WiFi. Connect attempt count down = ");
+    delay(1000);                   //  wait between reattempts
+    AMDP_PRINT("<connectToNetwork> Re-attempting connection to Access Point. Connect attempt count down = ");
     AMDP_PRINTLN(maxConnectionAttempts);
+    AMDP_PRINT("<connectToNetwork>  current Wifi.status() is: ");
+    AMDP_PRINTLN(WiFi.status());
+    int WFs = WiFi.status();     // keep it stable during following tests
+    if(WFs == 1 || WFs == 4 || WFs == 5 || WFs == 6 || WFs == 0 )
+    {   connectToWifi();          // things went bad enough to need another connect attempt
+        delay(1500);              // give it some time to make connection
+    }
     maxConnectionAttempts--;
     wifiCurrConAttemptsCnt++;
   } //while  
@@ -751,6 +796,11 @@ void connectToNetwork()
   {
     AMDP_PRINTLN("<connectToNetwork> Connection to network FAILED");
   } //if
+  else
+  {
+    AMDP_PRINTLN("<connectToNetwork> Connection to network SUCCEEDED");
+  }
+  
 } //connectToNetwork() 
 
 /**
@@ -1311,8 +1361,9 @@ void setup()
 void loop() 
 {
   cntLoop ++; // Increment loop() counter
+  if(WifiLastEvent != -1) processWifiEvent();    // if there's a pending Wifi event, handle it
   if((millis() >= goIMU) && mpuInterrupt == true) readIMU(); // Update the OLED with data
-  if(millis() >= goOLED) updateOLED(ypr[2]); // Update the OLED with data. Use ypr[0], ypr[1], ypr[2] depending on circuit orientation
-  if(millis() >= goLED) updateLED(); // Update the OLED with data
+  if(millis() >= goOLED) updateOLED(ypr[2]);   // Update the OLED with data. Use ypr[0], ypr[1], ypr[2] depending on circuit orientation
+  if(millis() >= goLED) updateLED();           // Update the OLED with data
   if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
 } //loop()
