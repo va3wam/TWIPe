@@ -9,6 +9,8 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.7   2020-05-29 AM: Updated the IMU calibration data for Andrew's robot and added a call to setbalanceDistance() from readIMU() 
+ *                        that does not seem  to work.
  * 0.0.6   2020-05-23 DAE: make Wifi startup more robust by calling connectToWifi after certain errors
  *                    Make Wifi event handler just store the event for loop() to process at background level
  *                    Temporarily disable timer that calls connectToWifi() in handling of STA_DISCONNECTED event
@@ -279,7 +281,7 @@ void IRAM_ATTR rightMotorTimerISR()
     return;
   } //if  
   // Determine motor direction
-  if(stepperMotor[motor].tripDistance < 0) 
+  if(stepperMotor[motor].tripDistance < 90) 
   {
     digitalWrite(gp_DRV1_DIR,HIGH);
     stepMotor(motor,-1); // Manage step signalling
@@ -1172,12 +1174,12 @@ void cfgByMAC()
   if(myMACaddress == "BCDDC2F7D6D5") // This is Andrew's bot
   {
     AMDP_PRINTLN("<cfgByMAC> Setting up MAC BCDDC2F7D6D5 configuration - Andrew");
-    XGyroOffset = 135;
-    YGyroOffset = -9;
-    ZGyroOffset = -85;
-    XAccelOffset = -3396;
-    YAccelOffset = 830;
-    ZAccelOffset = 1890;  
+    XGyroOffset = -4691;
+    YGyroOffset = 1935;
+    ZGyroOffset = 1873;
+    XAccelOffset = 16383;
+    YAccelOffset = 0;
+    ZAccelOffset = 0; 
     robot.heightCOM = 5;
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
@@ -1240,6 +1242,7 @@ void readIMU()
     mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
     mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
+    setBalanceDistance(ypr[2]); // Pass angle. AM did not work
     dmpFifoDataPresentCnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
   } //if
   else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
