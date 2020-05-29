@@ -323,14 +323,14 @@ void IRAM_ATTR leftMotorTimerISR()
  * @brief Set the number of steps the motors must take to get center of mass  at 90 degrees to ground
  * @param angle // Angle robot is leaning. Use polarity to indicate forward/backward
  */
-void setBalanceDistance(float distanceFrom90)
+void setBalanceDistance(float angle)
 {
 //  distanceFrom90 = (distanceFrom90 * 180 / PI);
-  distanceFrom90 -= 90; // Target is hardcoded as 90 degrees which should be standing up straight
-  int distance = (tan(distanceFrom90 * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
+  angle -= 90; // Target is hardcoded as 90 degrees which should be standing up straight
+  int distance = (tan(angle * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
   int steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
   Serial.print("<setBalanceDistance> Distance from 90 Deg. = ");
-  Serial.print(distanceFrom90);
+  Serial.print(angle);
   Serial.printf("\t Distance = %d \t Steps = %d \r\n", distance, steps);
   // Update distance to travel for right motor
   portENTER_CRITICAL_ISR(&rightMotorTimerMux);
