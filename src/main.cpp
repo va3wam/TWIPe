@@ -2,13 +2,14 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.5
+ * @version 0.0.7
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.8   2020-05-29 AM: Fixed up code to do quick and dirty balancing
  * 0.0.7   2020-05-29 AM: Updated the IMU calibration data for Andrew's robot and added a call to setbalanceDistance() from readIMU() 
  *                        that does not seem  to work.
  * 0.0.6   2020-05-23 DAE: make Wifi startup more robust by calling connectToWifi after certain errors
@@ -306,7 +307,7 @@ void IRAM_ATTR leftMotorTimerISR()
     return;
   } //if  
   // Determine motor direction
-  if(stepperMotor[motor].tripDistance < 0) 
+  if(stepperMotor[motor].tripDistance < 90) 
   {
     digitalWrite(gp_DRV2_DIR,HIGH);
     stepMotor(motor,-1); // Manage step signalling
@@ -322,10 +323,15 @@ void IRAM_ATTR leftMotorTimerISR()
  * @brief Set the number of steps the motors must take to get center of mass  at 90 degrees to ground
  * @param angle // Angle robot is leaning. Use polarity to indicate forward/backward
  */
-void setBalanceDistance(float angle)
+void setBalanceDistance(float distanceFrom90)
 {
-  int distance = (tan(angle * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
+//  distanceFrom90 = (distanceFrom90 * 180 / PI);
+  distanceFrom90 -= 90; // Target is hardcoded as 90 degrees which should be standing up straight
+  int distance = (tan(distanceFrom90 * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
   int steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
+  Serial.print("<setBalanceDistance> Distance from 90 Deg. = ");
+  Serial.print(distanceFrom90);
+  Serial.printf("\t Distance = %d \t Steps = %d \r\n", distance, steps);
   // Update distance to travel for right motor
   portENTER_CRITICAL_ISR(&rightMotorTimerMux);
   stepperMotor[RIGHT_MOTOR].tripDistance = steps;
@@ -1242,8 +1248,8 @@ void readIMU()
     mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
     mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
-    setBalanceDistance(ypr[2]); // Pass angle. AM did not work
     dmpFifoDataPresentCnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
+    setBalanceDistance(ypr[2]);
   } //if
   else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
   {
@@ -1368,5 +1374,5 @@ void loop()
   if((millis() >= goIMU) && mpuInterrupt == true) readIMU(); // Update the OLED with data
   if(millis() >= goOLED) updateOLED(ypr[2]);   // Update the OLED with data. Use ypr[0], ypr[1], ypr[2] depending on circuit orientation
   if(millis() >= goLED) updateLED();           // Update the OLED with data
-  if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
+//  if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
 } //loop()
