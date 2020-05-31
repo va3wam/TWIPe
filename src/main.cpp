@@ -9,7 +9,8 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
- * 0.0.10  2020-05-31 AM: Added portENTER_CRITICAL(&balanceMUX) and portEXIT_CRITICAL(&balanceMUX) to calcBalanceParameters
+ * 0.0.10  2020-05-31 AM: Added portENTER_CRITICAL(&balanceMUX) and portEXIT_CRITICAL(&balanceMUX) to calcBalanceParameters. Added 
+ *                    proper header and print labels to processWifiEvent(). 
  * 0.0.9   2020-05-31 AM: Added messaging structure. Removed distance and odometer from motor structure. Changed metadata messaging
  *                    to use new message structure. Replaced formatBalanceData() with calcBalanceParmeters(). Removed MQTT control
  *                    of motors. Replaced local variables in calcBalanceParameters() with robotBalance structure.
@@ -313,8 +314,10 @@ void connectToMqtt()
 } //connectToMqtt()
 
 /**
- * @brief Handle all WiFi events
+ * @brief Keeps track of the last WiFi event that occurred and  prints it out
  * @param event WiFi event that caused this function to be called
+ * @note Called from WiFi event handler
+ 
  * # WiFi Event Handling
  * All Wifi events are processed by the WiFiEvent method. A list of the events appears in the table below.
  * Events preceded by a ">" are common, and have been seen in TWIPe debug logs
@@ -374,25 +377,29 @@ void WiFiEvent(WiFiEvent_t event)
       AMDP_PRINTLN(event);
      }
   WifiLastEvent = event;                    // remember what event it was, and signal loop() to process it
-}
+} //WiFiEvent()
 
+/**
+ * @brief Actually handles WiFi events using the last known wifi event that was set in WiFiEvent()
+ * @note Called from loop()
+ */
 void processWifiEvent()                    // called fron loop() to handle event ID stored in WifiLastEvent
 {
   int event = WifiLastEvent;                    // retrieve last event that occurred
   WifiLastEvent = -1;                       // and say that we've processed it
   String tmpHostNameVar; // Hold WiFi host name created in this function
-  AMDP_PRINT("<WiFiEvent> event:");  
+  AMDP_PRINT("<processWiFiEvent> event:");  
   AMDP_PRINTLN(event);
   switch(event) 
   {
     case SYSTEM_EVENT_STA_CONNECTED:
     {
-      AMDP_PRINTLN("<WiFiEvent> Event 4 = Got connected to Access Point");
+      AMDP_PRINTLN("<processWiFiEvent> Event 4 = Got connected to Access Point");
       break;        
     } //case
     case SYSTEM_EVENT_STA_DISCONNECTED:
     {
-      AMDP_PRINTLN("<WiFiEvent> Lost WiFi connection");
+      AMDP_PRINTLN("<processWiFiEvent> Lost WiFi connection");
 //      int blockTime  = 10; // https://www.freertos.org/FreeRTOS-timers-xTimerStart.html
 //      xTimerStop(mqttReconnectTimer, blockTime); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi. Disconnect triggers new connect atempt
 //      xTimerStart(wifiReconnectTimer, blockTime); // Activate wifi timer (which only runs 1 time)
@@ -402,43 +409,43 @@ void processWifiEvent()                    // called fron loop() to handle event
     } //case
     case SYSTEM_EVENT_STA_GOT_IP:
     {
-      AMDP_PRINT("<WiFiEvent> Event 7 = Got IP address. That address is: ");
+      AMDP_PRINT("<processWiFiEvent> Event 7 = Got IP address. That address is: ");
       AMDP_PRINTLN(WiFi.localIP());
       myIPAddress = ipToString(WiFi.localIP());
       myAccessPoint = WiFi.SSID();
       tmpHostNameVar = myHostNameSuffix + myMACaddress;
       WiFi.setHostname((char*)tmpHostNameVar.c_str());
       myHostName = WiFi.getHostname();
-      Serial.print("<WiFiEvent> Network connecion attempt #");
+      Serial.print("<processWiFiEvent> Network connecion attempt #");
       Serial.print(wifiConAttemptsCnt);
       Serial.print(" SUCCESSFUL after this many tries: ");
       Serial.println(wifiCurrConAttemptsCnt);
-      Serial.println("<WiFiEvent> Network information is as follows..."); 
-      Serial.print("<WiFiEvent> - Access Point Robot is connected to = ");
+      Serial.println("<processWiFiEvent> Network information is as follows..."); 
+      Serial.print("<processWiFiEvent> - Access Point Robot is connected to = ");
       Serial.println(myAccessPoint);
-      Serial.print("<WiFiEvent> - Robot Network Host Name = ");
+      Serial.print("<processWiFiEvent> - Robot Network Host Name = ");
       Serial.println(myHostName);
-      Serial.print("<WiFiEvent> - Robot IP Address = ");
+      Serial.print("<processWiFiEvent> - Robot IP Address = ");
       Serial.println(myIPAddress);
-      Serial.print("<WiFiEvent> - Robot MAC Address = ");
+      Serial.print("<processWiFiEvent> - Robot MAC Address = ");
       Serial.println(myMACaddress);    
       wifi_connected = true;
-      AMDP_PRINTLN("<WiFiEvent> Use MAC address to create MQTT topic trees...");
+      AMDP_PRINTLN("<processWiFiEvent> Use MAC address to create MQTT topic trees...");
       cmdTopicMQTT = myHostName + MQTT_IN_CMD; // Define variable with the full name of the incoming command topic
       balTopicMQTT = myHostName + MQTT_TEL_BAL; // Define variabe with the full name of the outgoing balance telemetry topic
       metTopicMQTT = myHostName + MQTT_METADATA; // Define variable with full name of the outgoiong metadata topic
-      AMDP_PRINT("<WiFiEvent> cmdTopicMQTT = ");
+      AMDP_PRINT("<processWiFiEvent> cmdTopicMQTT = ");
       AMDP_PRINTLN(cmdTopicMQTT);
-      AMDP_PRINT("<WiFiEvent> balTopicMQTT = ");
+      AMDP_PRINT("<processWiFiEvent> balTopicMQTT = ");
       AMDP_PRINTLN(balTopicMQTT);
-      AMDP_PRINT("<WiFiEvent> metTopicMQTT = ");
+      AMDP_PRINT("<processWiFiEvent> metTopicMQTT = ");
       AMDP_PRINTLN(metTopicMQTT);
       connectToMqtt();
       break;
     } //case
     default:
     {
-      AMDP_PRINT("<WiFiEvent> Detected unmanaged WiFi event ");
+      AMDP_PRINT("<processWiFiEvent> Detected unmanaged WiFi event ");
       AMDP_PRINTLN(event);
     } //default
   } //switch
