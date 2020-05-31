@@ -10,7 +10,8 @@
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
  * 0.0.9   2020-05-31 AM: Added messaging structure. Removed distance and odometer from motor structure. Changed metadata messaging
- *                    to use new message structure. 
+ *                    to use new message structure. Replaced formatBalanceData() with calcBalanceParmeters(). Removed MQTT control
+ *                    of motors.
  * 0.0.8   2020-05-29 AM: Fixed up code to do quick and dirty balancing
  * 0.0.7   2020-05-29 AM: Updated the IMU calibration data for Andrew's robot and added a call to setbalanceDistance() from readIMU() 
  *                        that does not seem  to work.
@@ -161,8 +162,6 @@ typedef struct
   long delayTimeMax = 0; // Most microseconds it took for the delay time event to happen
   long delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
   int motorDelay = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
-//  int tripDistance = 0; // Current distance to travel
-//  int tripOdometer = 0; // Current distance travelled toward trip distance
   int stepsPerRev = 0;
 } motor; // Array for the two stepper motors that drive the robot
  static volatile motor stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
@@ -178,14 +177,12 @@ int goIMU = 0; // Target time for next read of IMU data
 int goOLED = 0; // Target time for next OLED update
 int goMETADATA = 0; // Target time for next serial port
 int goLED = 0; // Target time for next toggle of LED
-//boolean sendMetaDataToMQTT = false; // Used to decide if metadata about the code shoud go to MQTT broker or serial port
-//boolean sendBalanceToMQTT = false; // Used to decide if balance telemetry data should be sent to the MQTT broker
 #define TARGET_CONSOLE 0
 #define TARGET_MQTT 1
 typedef struct
 {
   boolean active = false;
-  boolean detination = TARGET_CONSOLE;
+  boolean destination = TARGET_CONSOLE;
   String message = "";
 } messageControl;
 static volatile messageControl baltelMsg; // Object that contains details for controlling balance telemetry messaging  
@@ -240,120 +237,6 @@ String formatMAC()
   AMDP_PRINTLN(mac);
   return mac;
 } //formatMAC()
-
-/**
- * @brief Control stepping of both stepper motors. 
- * @note ISR for each motor calls this routine with the motor number index.  
- * @param index Which motor the interrupt is for. 0 = right motor, 1 = left motor
- * @param mod Odometer modifier. Handle updating the trip odometer for both polarities (directions)
- */
-void stepMotor(int index, uint mod) 
-{
-  uint8_t gpioPin[2]; // Create 2 element array to hold values of the left and right motor pins
-  gpioPin[0] = gp_DRV1_STEP; // Element 0 holds right motor GPIO pin value
-  gpioPin[1] = gp_DRV2_STEP; // Element 1 holds left motor GPIO pin value
-  if(stepperMotor[index].interruptCounter == 1) // If this is the rising edge of the step signal
-  {
-    digitalWrite(gpioPin[index], HIGH);
-  } //if
-  if(stepperMotor[index].interruptCounter == 2) // If this is the falling edge of the step signal
-  {
-    digitalWrite(gpioPin[index], LOW);
-  } //if
-  if(stepperMotor[index].interruptCounter >= stepperMotor[index].motorDelay) // If this is the end of the delay period
-  {
-    portENTER_CRITICAL_ISR(&rightMotorTimerMux);
-    stepperMotor[index].interruptCounter = 0;
-//    stepperMotor[index].tripOdometer = stepperMotor[index].tripOdometer + mod; // Update odometer here to count a single step
-    portEXIT_CRITICAL_ISR(&rightMotorTimerMux);
-  } //if
-  else
-  {
-    portENTER_CRITICAL_ISR(&rightMotorTimerMux);
-    stepperMotor[index].interruptCounter++;
-    portEXIT_CRITICAL_ISR(&rightMotorTimerMux);  
-  } //else
-} //rightMotorTimerISR()
-
-/** 
- * @brief ISR for right stepper motor that drives the robot
- * 
- */
-void IRAM_ATTR rightMotorTimerISR() 
-{
-  int motor = 0;
-  // If there is no distance to travel do nothing
-//  if(stepperMotor[motor].tripDistance == stepperMotor[motor].tripOdometer)
-//  {
-//    return;
-//  } //if  
-  // Determine motor direction
-//  if(stepperMotor[motor].tripDistance < 90) 
-//  {
-//    digitalWrite(gp_DRV1_DIR,HIGH);
-//    stepMotor(motor,-1); // Manage step signalling
-//} //if   
-//  else
-//  {
-//    digitalWrite(gp_DRV1_DIR,LOW);
-//    stepMotor(motor,1); // Take a step
-//  } //else
-} //rightMotorTimerISR()
-
-/** 
- * @brief ISR for left stepper motor that drives the robot
- * 
- */
-void IRAM_ATTR leftMotorTimerISR() 
-{
-  int motor = 1;
-  // If there is no distance to travel do nothing
-//  if(stepperMotor[motor].tripDistance == stepperMotor[motor].tripOdometer)
-//  {
-//    return;
-//  } //if  
-  // Determine motor direction
-//  if(stepperMotor[motor].tripDistance < 90) 
-//  {
-//    digitalWrite(gp_DRV2_DIR,HIGH);
-//    stepMotor(motor,-1); // Manage step signalling
-//} //if   
-//  else
-//  {
-//    digitalWrite(gp_DRV2_DIR,LOW);
-//    stepMotor(motor,1); // Take a step
-//  } //else
-} //leftMotorTimerISR()
-
-/**
- * @brief Set the number of steps the motors must take to get center of mass  at 90 degrees to ground
- * @param angleRadians Angle of robot lean in radians. To convert to degrees use this formula: degrees = angle * 180 / PI
- */
-void setBalanceDistance(float angleRadians)
-{
-  float angleDegrees = angleRadians * 180 / PI; // Convert radians to degrees
-  float distance = robot.heightCOM - (tan(angleRadians * robot.heightCOM)); // Calculate distance COM is away from 90 degrees. Round up.
-  float steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
-//  robot.leanAngleDegrees = angleDegrees;
-  Serial.print("<setBalanceDistance> Angle (Radians) = ");
-  Serial.print(angleRadians);
-  Serial.print("\t Angle (Degrees) = ");
-  Serial.print(angleDegrees);
-  Serial.print("\t Distance from COM = ");
-  Serial.print(distance);
-  Serial.print("\t Steps to COM = ");
-  Serial.println(steps);
-  // Update distance to travel for right motor
-//  portENTER_CRITICAL_ISR(&rightMotorTimerMux);
-//  stepperMotor[RIGHT_MOTOR].tripDistance = steps;
-//  stepperMotor[RIGHT_MOTOR].tripOdometer = 0;
-//  portEXIT_CRITICAL_ISR(&rightMotorTimerMux);    
-  // Update distance to travel for left motor
-//  portENTER_CRITICAL_ISR(&leftMotorTimerMux);
-//  stepperMotor[LEFT_MOTOR].tripDistance = steps;
-//  stepperMotor[LEFT_MOTOR].tripOdometer = 0;
-//  portEXIT_CRITICAL_ISR(&leftMotorTimerMux);    
-} // setBalanceDistance
 
 /**
  * @brief ISR for left DRV8825 fault condition
@@ -681,11 +564,14 @@ void onMqttUnsubscribe(uint16_t packetId)
  * ## Table of Known Commands
  * | Command                | Description                                                                                            |
  * |:-----------------------|:-------------------------------------------------------------------------------------------------------|
- * | balTelON               | Causes balance telemetry data to be published to the MQTT broker topic {robot name}/telemetry/balance  |  
- * | balTelOFF              | Causes balance telemetry data to stop being published to the MQTT broker |  
+ * | balTelON               | Causes balance telemetry data to be output |  
+ * | balTelOFF              | Causes balance telemetry data to stop being output |  
+ * | balTelCON              | Causes balance telemetry to be published to the local console |  
+ * | balTelMQTT             | Causes balance telemetry to be published to the MQTT broker topic {robot name}/metadata |  
  * | metaDataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
  * | metaDataOFF            | Causes metadata to stop being published to the MQTT broker |  
- * | motor,num,steps,delay  | Manual motor control. Use +/- step values for direction | * 
+ * | metaDataCON            | Causes metadata to be published to the local console |
+ * | metaDataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
  */
 void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) 
 {
@@ -709,67 +595,46 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   String tmp = String(payload).substring(0,len);
   AMDP_PRINT("<onMqttMessage> Message to process = ");
   AMDP_PRINTLN(tmp);
-  if(tmp.substring(0,5) == "motor")
+  if(tmp == "balTelCON")
   {
-    int Index1 = tmp.indexOf(','); // Command motor
-    int Index2 = tmp.indexOf(',', Index1+1); // Motor number (1 or 2)
-    int Index3 = tmp.indexOf(',', Index2+1); // Motor speed
-    int Index4 = tmp.indexOf(',', Index3+1); // Motor direction
-    String mNum = tmp.substring(Index1+1, Index2);
-    String mSteps = tmp.substring(Index2+1, Index3);
-    String mDelay = tmp.substring(Index3+1, Index4);  
-    int motNum = atoi(mNum.c_str());
-    uint motStep = atoi(mSteps.c_str());
-    int motDelay = atoi(mDelay.c_str());
-    if(motNum == 0)
-    {
-      portENTER_CRITICAL(&rightMotorTimerMux); // Prevent loop() from updating variable while we are changing it
-//      stepperMotor[motNum].tripDistance = motStep;
-//      stepperMotor[motNum].tripOdometer = 0;
-      stepperMotor[motNum].motorDelay = motDelay; 
-      portEXIT_CRITICAL(&rightMotorTimerMux); // Allow loop() access to variable again
-    } //if
-    else
-    {
-      portENTER_CRITICAL(&leftMotorTimerMux); // Prevent loop() from updating variable while we are changing it
-//      stepperMotor[motNum].tripDistance = motStep;
-//      stepperMotor[motNum].tripOdometer = 0;
-      stepperMotor[motNum].motorDelay = motDelay; 
-      portEXIT_CRITICAL(&leftMotorTimerMux); // Allow loop() access to variable again
-    } //else
-    AMDP_PRINTLN("<onMqttMessage> Manual motor control command");    
-    AMDP_PRINT("<onMqttMessage> Motor number = ");    
-    AMDP_PRINTLN(motNum);    
-//    AMDP_PRINT("<onMqttMessage> Steps = ");    
-//    AMDP_PRINTLN(stepperMotor[motNum].tripDistance);    
-    AMDP_PRINT("<onMqttMessage> Delay (us) = ");    
-    AMDP_PRINTLN(stepperMotor[motNum].motorDelay);    
+    AMDP_PRINTLN("<onMqttMessage> Publish telemetry data to console");
+    baltelMsg.destination = TARGET_CONSOLE;
   } //if
+  else if(tmp == "balTelMQTT")
+  {
+    AMDP_PRINTLN("<onMqttMessage> Publishing telemetry data to MQTT broker");
+    baltelMsg.destination = TARGET_MQTT;
+  } //elseif
   else if(tmp == "balTelON")
   {
-    AMDP_PRINTLN("<onMqttMessage> Publishing of telemetry data to MQTT broker now ON");
+    AMDP_PRINTLN("<onMqttMessage> Publishing of telemetry data now ON");
     baltelMsg.active = true;
-//    sendBalanceToMQTT = true;
-  } //if
+  } //elseif
   else if(tmp == "balTelOFF")
   {
-    AMDP_PRINTLN("<onMqttMessage> Publishing of telemetry data to MQTT broker now OFF");
+    AMDP_PRINTLN("<onMqttMessage> Publishing of telemetry data now OFF");
     baltelMsg.active = false;
-//    sendBalanceToMQTT = false;
-  } //if
-  else if(tmp == "metaDataON")
+  } //elseif
+  else if(tmp == "metadataCON")
   {
-    AMDP_PRINTLN("<onMqttMessage> Publishing of metadata to MQTT broker now ON");
+    AMDP_PRINTLN("<onMqttMessage> Publish metadata to console");
+    metadataMsg.destination = TARGET_CONSOLE; 
+  } //elseif
+  else if(tmp == "metadataMQTT")
+  {
+    AMDP_PRINTLN("<onMqttMessage> Publish metadata to MQTT broker");
+    metadataMsg.destination = TARGET_MQTT; 
+  } //elseif
+  else if(tmp == "metadataON")
+  {
+    AMDP_PRINTLN("<onMqttMessage> Publishing of metadata now ON");
     metadataMsg.active = true;
-    metadataMsg.detination = TARGET_MQTT; // Handle in seperate command
-//    sendMetaDataToMQTT = true;
-  } //if
-  else if(tmp == "metaDataOFF")
+  } //elseif
+  else if(tmp == "metadataOFF")
   {
-    AMDP_PRINTLN("<onMqttMessage> Publishing of metadata to MQTT broker now OFF");
+    AMDP_PRINTLN("<onMqttMessage> Publishing of metadata now OFF");
     metadataMsg.active = false;
-//    sendMetaDataToMQTT = false;
-  } //if
+  } //elseif
   else
   {
     AMDP_PRINTLN("<onMqttMessage> Unknown command. Doing nothing");
@@ -979,17 +844,89 @@ void publishMQTT(String topic, String msg)
   } //else
 } //publishMQTT()
 
+
 /**
- * @brief Calculate angle and reformat result of calculation from float to String to pass along to publishMQTT() 
- * @param angle Angle of robot tilt in radians. To convert to degrees use this formula: degrees = angleRadians * 180 / PI
- * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
- * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
+ * @brief Control stepping of both stepper motors. 
+ * @note ISR for each motor calls this routine with the motor number index.  
+ * @param index Which motor the interrupt is for. 0 = right motor, 1 = left motor
+ * @param mod Odometer modifier. Handle updating the trip odometer for both polarities (directions)
  */
-void formatBalanceData(float angleRadians)
+void stepMotor(int index, uint mod) 
 {
-  float angleDegrees =  angleRadians * 180 / PI;     
-  publishMQTT("balance", String(angleDegrees));
-} //formatBalanceData()
+  uint8_t gpioPin[2]; // Create 2 element array to hold values of the left and right motor pins
+  gpioPin[0] = gp_DRV1_STEP; // Element 0 holds right motor GPIO pin value
+  gpioPin[1] = gp_DRV2_STEP; // Element 1 holds left motor GPIO pin value
+  if(stepperMotor[index].interruptCounter == 1) // If this is the rising edge of the step signal
+  {
+    digitalWrite(gpioPin[index], HIGH);
+  } //if
+  if(stepperMotor[index].interruptCounter == 2) // If this is the falling edge of the step signal
+  {
+    digitalWrite(gpioPin[index], LOW);
+  } //if
+  if(stepperMotor[index].interruptCounter >= stepperMotor[index].motorDelay) // If this is the end of the delay period
+  {
+    portENTER_CRITICAL_ISR(&rightMotorTimerMux);
+    stepperMotor[index].interruptCounter = 0;
+//    stepperMotor[index].tripOdometer = stepperMotor[index].tripOdometer + mod; // Update odometer here to count a single step
+    portEXIT_CRITICAL_ISR(&rightMotorTimerMux);
+  } //if
+  else
+  {
+    portENTER_CRITICAL_ISR(&rightMotorTimerMux);
+    stepperMotor[index].interruptCounter++;
+    portEXIT_CRITICAL_ISR(&rightMotorTimerMux);  
+  } //else
+} //rightMotorTimerISR()
+
+/** 
+ * @brief ISR for right stepper motor that drives the robot
+ * 
+ */
+void IRAM_ATTR rightMotorTimerISR() 
+{
+  int motor = 0;
+  // If there is no distance to travel do nothing
+  // Determine motor direction
+} //rightMotorTimerISR()
+
+/** 
+ * @brief ISR for left stepper motor that drives the robot
+ * 
+ */
+void IRAM_ATTR leftMotorTimerISR() 
+{
+  int motor = 1;
+  // If there is no distance to travel do nothing
+  // Determine motor direction
+} //leftMotorTimerISR()
+
+/**
+ * @brief Calculate what needs to be done to get the robot's centre of mass (COM) over its drive wheels 
+ * @param angleRadians Angle of robot lean in radians. 
+ * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, 
+ * quaternion, raw acceleration, raw gyro, linear acceleration and gravity. 
+ * See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
+ */
+void calcBalanceParmeters(float angleRadians)
+{
+  float angleDegrees = angleRadians * 180 / PI; // Convert radians to degrees
+  float distance = robot.heightCOM - (tan(angleRadians * robot.heightCOM)); // Calculate distance COM is away from 90 degrees. Round up.
+  float steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
+  String tmp = String(angleRadians) + "," + String(distance) + "," + String(steps);
+  if(baltelMsg.active) // If configured to write balance telemetry data 
+  {
+    if(baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
+    {
+      Serial.print("<calcBalanceParmeters> ");
+      Serial.println(tmp);
+    } //if
+    else // Otherwise assume we are to send the data to the MQTT broker
+    {
+      publishMQTT("metadata", tmp);    
+    } //else
+  } //if
+} // calcBalanceParmeters()
 
 /**
  * @brief Send updated metadata about the running of the code.
@@ -1024,11 +961,9 @@ void updateMetaData()
   tmp += "," + String(unknownCmdCnt); 
   tmp += "," + String(leftDRVfault); 
   tmp += "," + String(rightDRVfault); 
-  
-//  if(sendMetaDataToMQTT && wifi_connected) // If configured to send metadata to MQTT and there is a wifi connection send to MQTT broker 
   if(metadataMsg.active) // If configured to write metadata 
   {
-    if(metadataMsg.detination == TARGET_CONSOLE) // If we are to send this data to the console
+    if(metadataMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
     {
       AMDP_PRINT("<updateMetaData> ");
       AMDP_PRINTLN(tmp);
@@ -1270,17 +1205,12 @@ void readIMU()
     mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
     dmpFifoDataPresentCnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
-    setBalanceDistance(ypr[2]);
+    calcBalanceParmeters(ypr[2]);
   } //if
   else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
   {
     dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty  
   } //else
-//  if(sendBalanceToMQTT) 
-  if(baltelMsg.active == true) 
-  {
-    formatBalanceData(ypr[2]);
-  }//if
   goIMU = millis() + tmrIMU; // Reset IMU update counter  
 } // readIMU()
 
