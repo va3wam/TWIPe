@@ -9,7 +9,8 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
- * 0.0.9   2020-05-31 AM: Added messaging object, removed distance and odometer from motor structure, created balance structure
+ * 0.0.9   2020-05-31 AM: Added messaging structure. Removed distance and odometer from motor structure. Changed metadata messaging
+ *                    to use new message structure. 
  * 0.0.8   2020-05-29 AM: Fixed up code to do quick and dirty balancing
  * 0.0.7   2020-05-29 AM: Updated the IMU calibration data for Andrew's robot and added a call to setbalanceDistance() from readIMU() 
  *                        that does not seem  to work.
@@ -177,7 +178,7 @@ int goIMU = 0; // Target time for next read of IMU data
 int goOLED = 0; // Target time for next OLED update
 int goMETADATA = 0; // Target time for next serial port
 int goLED = 0; // Target time for next toggle of LED
-boolean sendMetaDataToMQTT = false; // Used to decide if metadata about the code shoud go to MQTT broker or serial port
+//boolean sendMetaDataToMQTT = false; // Used to decide if metadata about the code shoud go to MQTT broker or serial port
 //boolean sendBalanceToMQTT = false; // Used to decide if balance telemetry data should be sent to the MQTT broker
 #define TARGET_CONSOLE 0
 #define TARGET_MQTT 1
@@ -759,12 +760,15 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   else if(tmp == "metaDataON")
   {
     AMDP_PRINTLN("<onMqttMessage> Publishing of metadata to MQTT broker now ON");
-    sendMetaDataToMQTT = true;
+    metadataMsg.active = true;
+    metadataMsg.detination = TARGET_MQTT; // Handle in seperate command
+//    sendMetaDataToMQTT = true;
   } //if
   else if(tmp == "metaDataOFF")
   {
     AMDP_PRINTLN("<onMqttMessage> Publishing of metadata to MQTT broker now OFF");
-    sendMetaDataToMQTT = false;
+    metadataMsg.active = false;
+//    sendMetaDataToMQTT = false;
   } //if
   else
   {
@@ -1021,15 +1025,19 @@ void updateMetaData()
   tmp += "," + String(leftDRVfault); 
   tmp += "," + String(rightDRVfault); 
   
-  if(sendMetaDataToMQTT && wifi_connected) /// If configured to send metadata to MQTT and there is a wifi connection send to MQTT broker 
+//  if(sendMetaDataToMQTT && wifi_connected) // If configured to send metadata to MQTT and there is a wifi connection send to MQTT broker 
+  if(metadataMsg.active) // If configured to write metadata 
   {
-    publishMQTT("metadata", tmp);
+    if(metadataMsg.detination == TARGET_CONSOLE) // If we are to send this data to the console
+    {
+      AMDP_PRINT("<updateMetaData> ");
+      AMDP_PRINTLN(tmp);
+    } //if
+    else // Otherwise assume we are to send the data to the MQTT broker
+    {
+      publishMQTT("metadata", tmp);    
+    } //else
   } //if
-  else // /Otherwise send to serial port
-  {
-    AMDP_PRINT("<updateMetaData> ");
-    AMDP_PRINTLN(tmp);
-  } //else
   goMETADATA = millis() + tmrMETADATA; // Reset SERIAL update target time
 } // updateMetaData()
 
@@ -1388,5 +1396,5 @@ void loop()
   if((millis() >= goIMU) && mpuInterrupt == true) readIMU(); // Update the OLED with data
   if(millis() >= goOLED) updateOLED(ypr[2]);   // Update the OLED with data. Use ypr[0], ypr[1], ypr[2] depending on circuit orientation
   if(millis() >= goLED) updateLED();           // Update the OLED with data
-//  if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
+  if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
 } //loop()
