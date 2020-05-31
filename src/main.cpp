@@ -2,13 +2,14 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.9
+ * @version 0.0.10
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.10  2020-05-31 AM: Added portENTER_CRITICAL(&balanceMUX) and portEXIT_CRITICAL(&balanceMUX) to calcBalanceParameters
  * 0.0.9   2020-05-31 AM: Added messaging structure. Removed distance and odometer from motor structure. Changed metadata messaging
  *                    to use new message structure. Replaced formatBalanceData() with calcBalanceParmeters(). Removed MQTT control
  *                    of motors. Replaced local variables in calcBalanceParameters() with robotBalance structure.
@@ -186,7 +187,8 @@ typedef struct
   String message = "";
 } messageControl; // Structure for handling messaging for key objects
 static volatile messageControl baltelMsg; // Object that contains details for controlling balance telemetry messaging  
-static volatile messageControl metadataMsg; // Object that contains details for controlling metadata messaging  
+static volatile messageControl metadataMsg; // Object that contains details for controlling metadata messaging 
+portMUX_TYPE messageMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize message variables between ISR and loop() 
 typedef struct
 {
   float angleRadians = 0; // Robot tilt angle in radians
@@ -197,6 +199,7 @@ typedef struct
   float steps = distance / robot.distancePerStep; // Number of steps that it will take to get to target angle
 } balanceControl; // Structure for handling robot balancing calculations
 static volatile balanceControl robotBalance; // Object for calculating robot balance
+portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop() 
 
 // Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment. 
 int wifiConAttemptsCnt = 0; // Track the number of over all attempts made to connect to the WiFi Access Point
@@ -878,7 +881,6 @@ void stepMotor(int index, uint mod)
   {
     portENTER_CRITICAL_ISR(&rightMotorTimerMux);
     stepperMotor[index].interruptCounter = 0;
-//    stepperMotor[index].tripOdometer = stepperMotor[index].tripOdometer + mod; // Update odometer here to count a single step
     portEXIT_CRITICAL_ISR(&rightMotorTimerMux);
   } //if
   else
@@ -920,10 +922,13 @@ void IRAM_ATTR leftMotorTimerISR()
  */
 void calcBalanceParmeters(float angleRadians)
 {
+  portENTER_CRITICAL(&balanceMUX); // Prevent other code from updating balance variables while we are changing them
+  mpuInterrupt = true; // Flag the fact that there is data ready to be read
   robotBalance.angleRadians = angleRadians;
   robotBalance.angleDegrees = robotBalance.angleRadians * 180 / PI; // Convert radians to degrees
   robotBalance.distance = robot.heightCOM - (tan(angleRadians * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
   robotBalance.steps = robotBalance.distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
+  portEXIT_CRITICAL(&balanceMUX); // Allow other code to update balance variables again
   String tmp = String(angleRadians) + "," + String(robotBalance.distance) + "," + String(robotBalance.steps);
   if(baltelMsg.active) // If configured to write balance telemetry data 
   {
@@ -1324,7 +1329,7 @@ void setup()
   goLED = millis() + tmrLED; // Reset LED flashing counter
   goIMU = millis() + tmrIMU; // Reset IMU update counter
   goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
-  cntLoop = 0; // Loop counter does not interact with timer ISR so no muxing is required 
+  cntLoop = 0; // Reset counter that tracks how many iterations of loop() have occurred
 } //setup()
 
 /**
@@ -1334,8 +1339,8 @@ void loop()
 {
   cntLoop ++; // Increment loop() counter
   if(WifiLastEvent != -1) processWifiEvent();    // if there's a pending Wifi event, handle it
-  if((millis() >= goIMU) && mpuInterrupt == true) readIMU(); // Update the OLED with data
-  if(millis() >= goOLED) updateOLED(ypr[2]);   // Update the OLED with data. Use ypr[0], ypr[1], ypr[2] depending on circuit orientation
+  if((millis() >= goIMU) && mpuInterrupt == true) readIMU(); // Read the IMU. Balancing and data printing is handled in here as well
+  if(millis() >= goOLED) updateOLED(ypr[2]);   // Control OLED display
   if(millis() >= goLED) updateLED();           // Update the OLED with data
   if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
 } //loop()
