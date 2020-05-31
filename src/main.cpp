@@ -11,7 +11,7 @@
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
  * 0.0.9   2020-05-31 AM: Added messaging structure. Removed distance and odometer from motor structure. Changed metadata messaging
  *                    to use new message structure. Replaced formatBalanceData() with calcBalanceParmeters(). Removed MQTT control
- *                    of motors.
+ *                    of motors. Replaced local variables in calcBalanceParameters() with robotBalance structure.
  * 0.0.8   2020-05-29 AM: Fixed up code to do quick and dirty balancing
  * 0.0.7   2020-05-29 AM: Updated the IMU calibration data for Andrew's robot and added a call to setbalanceDistance() from readIMU() 
  *                        that does not seem  to work.
@@ -163,8 +163,8 @@ typedef struct
   long delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
   int motorDelay = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
   int stepsPerRev = 0;
-} motor; // Array for the two stepper motors that drive the robot
- static volatile motor stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
+} motorControl; // Structure for stepper motors that drive the robot
+ static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
 
 // Define global control variables.  
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)  
@@ -184,9 +184,19 @@ typedef struct
   boolean active = false;
   boolean destination = TARGET_CONSOLE;
   String message = "";
-} messageControl;
+} messageControl; // Structure for handling messaging for key objects
 static volatile messageControl baltelMsg; // Object that contains details for controlling balance telemetry messaging  
 static volatile messageControl metadataMsg; // Object that contains details for controlling metadata messaging  
+typedef struct
+{
+  float angleRadians = 0; // Robot tilt angle in radians
+  float angleDegrees = 0; // Robot tilt angle in degrees
+  float angleTargetRadians = 1.5707961; // Target angle robot wants to be at in radians. 1.5707961 is standing upright
+  float angleTargetDegrees = 90; // Target angle robot wants to be at in degrees. 90 standing upright
+  float distance = robot.heightCOM; // Distance in inches robot's Centre Of Mass (COM) is away from target
+  float steps = distance / robot.distancePerStep; // Number of steps that it will take to get to target angle
+} balanceControl; // Structure for handling robot balancing calculations
+static volatile balanceControl robotBalance; // Object for calculating robot balance
 
 // Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment. 
 int wifiConAttemptsCnt = 0; // Track the number of over all attempts made to connect to the WiFi Access Point
@@ -910,10 +920,11 @@ void IRAM_ATTR leftMotorTimerISR()
  */
 void calcBalanceParmeters(float angleRadians)
 {
-  float angleDegrees = angleRadians * 180 / PI; // Convert radians to degrees
-  float distance = robot.heightCOM - (tan(angleRadians * robot.heightCOM)); // Calculate distance COM is away from 90 degrees. Round up.
-  float steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
-  String tmp = String(angleRadians) + "," + String(distance) + "," + String(steps);
+  robotBalance.angleRadians = angleRadians;
+  robotBalance.angleDegrees = robotBalance.angleRadians * 180 / PI; // Convert radians to degrees
+  robotBalance.distance = robot.heightCOM - (tan(angleRadians * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
+  robotBalance.steps = robotBalance.distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
+  String tmp = String(angleRadians) + "," + String(robotBalance.distance) + "," + String(robotBalance.steps);
   if(baltelMsg.active) // If configured to write balance telemetry data 
   {
     if(baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
