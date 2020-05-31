@@ -2,13 +2,14 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.7
+ * @version 0.0.9
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.9   2020-05-31 AM: Added messaging object, removed distance and odometer from motor structure, created balance structure
  * 0.0.8   2020-05-29 AM: Fixed up code to do quick and dirty balancing
  * 0.0.7   2020-05-29 AM: Updated the IMU calibration data for Andrew's robot and added a call to setbalanceDistance() from readIMU() 
  *                        that does not seem  to work.
@@ -67,26 +68,20 @@
 #endif
 
 // Define robot specific global parameters 
-int16_t XGyroOffset; // Gyroscope x axis (Roll)
-int16_t YGyroOffset; // Gyroscope y axis (Pitch)
-int16_t ZGyroOffset; // Gyroscope z axis (Yaw)
-int16_t XAccelOffset; // Accelerometer x axis
-int16_t YAccelOffset; // Accelerometer y axis
-int16_t ZAccelOffset; // Accelerometer z axis
-//float wheelDiameter; // Diameter of wheel 
-//float wheelCircumference; // Diameter x pi
-//int stepsPerRevolution; // How many steps our motors need to take to do one complete revolution
-//float distancePerStep; // How far our robot moves per step
-//float heightCOM = 5; // How far it is from the ground to the Centre Of Mass of the robot
-// Define global variables about the robot's physical characteristics
-typedef struct
+typedef struct // Structure of physical attributes of the robot
 {
   float heightCOM = 0; // Height from ground to Center Of  Mass of robot in inches
   float wheelDiameter = 0; // Diameter of drive wheels in inches
   float wheelCircumference; // Diameter x pi 
   float distancePerStep = 0; // Distance travelled per step of motor in inches
-} physicalAttributes; // Array for the two stepper motors that drive the robot
- static volatile physicalAttributes robot; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
+  int16_t XGyroOffset; // Gyroscope x axis (Roll)
+  int16_t YGyroOffset; // Gyroscope y axis (Pitch)
+  int16_t ZGyroOffset; // Gyroscope z axis (Yaw)
+  int16_t XAccelOffset; // Accelerometer x axis
+  int16_t YAccelOffset; // Accelerometer y axis
+  int16_t ZAccelOffset; // Accelerometer z axis
+} robotAttributes; 
+static volatile robotAttributes robot; // Object of physical attributes of the robot 
 
 // Define OLED constants, classes and global variables 
 SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
@@ -165,8 +160,8 @@ typedef struct
   long delayTimeMax = 0; // Most microseconds it took for the delay time event to happen
   long delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
   int motorDelay = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
-  int tripDistance = 0; // Current distance to travel
-  int tripOdometer = 0; // Current distance travelled toward trip distance
+//  int tripDistance = 0; // Current distance to travel
+//  int tripOdometer = 0; // Current distance travelled toward trip distance
   int stepsPerRev = 0;
 } motor; // Array for the two stepper motors that drive the robot
  static volatile motor stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
@@ -183,7 +178,17 @@ int goOLED = 0; // Target time for next OLED update
 int goMETADATA = 0; // Target time for next serial port
 int goLED = 0; // Target time for next toggle of LED
 boolean sendMetaDataToMQTT = false; // Used to decide if metadata about the code shoud go to MQTT broker or serial port
-boolean sendBalanceToMQTT = false; // Used to decide if balance telemetry data should be sent to the MQTT broker
+//boolean sendBalanceToMQTT = false; // Used to decide if balance telemetry data should be sent to the MQTT broker
+#define TARGET_CONSOLE 0
+#define TARGET_MQTT 1
+typedef struct
+{
+  boolean active = false;
+  boolean detination = TARGET_CONSOLE;
+  String message = "";
+} messageControl;
+static volatile messageControl baltelMsg; // Object that contains details for controlling balance telemetry messaging  
+static volatile messageControl metadataMsg; // Object that contains details for controlling metadata messaging  
 
 // Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment. 
 int wifiConAttemptsCnt = 0; // Track the number of over all attempts made to connect to the WiFi Access Point
@@ -258,7 +263,7 @@ void stepMotor(int index, uint mod)
   {
     portENTER_CRITICAL_ISR(&rightMotorTimerMux);
     stepperMotor[index].interruptCounter = 0;
-    stepperMotor[index].tripOdometer = stepperMotor[index].tripOdometer + mod; // Update odometer here to count a single step
+//    stepperMotor[index].tripOdometer = stepperMotor[index].tripOdometer + mod; // Update odometer here to count a single step
     portEXIT_CRITICAL_ISR(&rightMotorTimerMux);
   } //if
   else
@@ -277,21 +282,21 @@ void IRAM_ATTR rightMotorTimerISR()
 {
   int motor = 0;
   // If there is no distance to travel do nothing
-  if(stepperMotor[motor].tripDistance == stepperMotor[motor].tripOdometer)
-  {
-    return;
-  } //if  
+//  if(stepperMotor[motor].tripDistance == stepperMotor[motor].tripOdometer)
+//  {
+//    return;
+//  } //if  
   // Determine motor direction
-  if(stepperMotor[motor].tripDistance < 90) 
-  {
-    digitalWrite(gp_DRV1_DIR,HIGH);
-    stepMotor(motor,-1); // Manage step signalling
-} //if   
-  else
-  {
-    digitalWrite(gp_DRV1_DIR,LOW);
-    stepMotor(motor,1); // Take a step
-  } //else
+//  if(stepperMotor[motor].tripDistance < 90) 
+//  {
+//    digitalWrite(gp_DRV1_DIR,HIGH);
+//    stepMotor(motor,-1); // Manage step signalling
+//} //if   
+//  else
+//  {
+//    digitalWrite(gp_DRV1_DIR,LOW);
+//    stepMotor(motor,1); // Take a step
+//  } //else
 } //rightMotorTimerISR()
 
 /** 
@@ -302,46 +307,51 @@ void IRAM_ATTR leftMotorTimerISR()
 {
   int motor = 1;
   // If there is no distance to travel do nothing
-  if(stepperMotor[motor].tripDistance == stepperMotor[motor].tripOdometer)
-  {
-    return;
-  } //if  
+//  if(stepperMotor[motor].tripDistance == stepperMotor[motor].tripOdometer)
+//  {
+//    return;
+//  } //if  
   // Determine motor direction
-  if(stepperMotor[motor].tripDistance < 90) 
-  {
-    digitalWrite(gp_DRV2_DIR,HIGH);
-    stepMotor(motor,-1); // Manage step signalling
-} //if   
-  else
-  {
-    digitalWrite(gp_DRV2_DIR,LOW);
-    stepMotor(motor,1); // Take a step
-  } //else
+//  if(stepperMotor[motor].tripDistance < 90) 
+//  {
+//    digitalWrite(gp_DRV2_DIR,HIGH);
+//    stepMotor(motor,-1); // Manage step signalling
+//} //if   
+//  else
+//  {
+//    digitalWrite(gp_DRV2_DIR,LOW);
+//    stepMotor(motor,1); // Take a step
+//  } //else
 } //leftMotorTimerISR()
 
 /**
  * @brief Set the number of steps the motors must take to get center of mass  at 90 degrees to ground
- * @param angle // Angle robot is leaning. Use polarity to indicate forward/backward
+ * @param angleRadians Angle of robot lean in radians. To convert to degrees use this formula: degrees = angle * 180 / PI
  */
-void setBalanceDistance(float angle)
+void setBalanceDistance(float angleRadians)
 {
-//  distanceFrom90 = (distanceFrom90 * 180 / PI);
-  angle -= 90; // Target is hardcoded as 90 degrees which should be standing up straight
-  int distance = (tan(angle * robot.heightCOM)); // Calculate distance COM is away from 90 degrees
-  int steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
-  Serial.print("<setBalanceDistance> Distance from 90 Deg. = ");
-  Serial.print(angle);
-  Serial.printf("\t Distance = %d \t Steps = %d \r\n", distance, steps);
+  float angleDegrees = angleRadians * 180 / PI; // Convert radians to degrees
+  float distance = robot.heightCOM - (tan(angleRadians * robot.heightCOM)); // Calculate distance COM is away from 90 degrees. Round up.
+  float steps = distance / robot.distancePerStep; // Calculate how many steps that it will take to cover that distance
+//  robot.leanAngleDegrees = angleDegrees;
+  Serial.print("<setBalanceDistance> Angle (Radians) = ");
+  Serial.print(angleRadians);
+  Serial.print("\t Angle (Degrees) = ");
+  Serial.print(angleDegrees);
+  Serial.print("\t Distance from COM = ");
+  Serial.print(distance);
+  Serial.print("\t Steps to COM = ");
+  Serial.println(steps);
   // Update distance to travel for right motor
-  portENTER_CRITICAL_ISR(&rightMotorTimerMux);
-  stepperMotor[RIGHT_MOTOR].tripDistance = steps;
-  stepperMotor[RIGHT_MOTOR].tripOdometer = 0;
-  portEXIT_CRITICAL_ISR(&rightMotorTimerMux);    
+//  portENTER_CRITICAL_ISR(&rightMotorTimerMux);
+//  stepperMotor[RIGHT_MOTOR].tripDistance = steps;
+//  stepperMotor[RIGHT_MOTOR].tripOdometer = 0;
+//  portEXIT_CRITICAL_ISR(&rightMotorTimerMux);    
   // Update distance to travel for left motor
-  portENTER_CRITICAL_ISR(&leftMotorTimerMux);
-  stepperMotor[LEFT_MOTOR].tripDistance = steps;
-  stepperMotor[LEFT_MOTOR].tripOdometer = 0;
-  portEXIT_CRITICAL_ISR(&leftMotorTimerMux);    
+//  portENTER_CRITICAL_ISR(&leftMotorTimerMux);
+//  stepperMotor[LEFT_MOTOR].tripDistance = steps;
+//  stepperMotor[LEFT_MOTOR].tripOdometer = 0;
+//  portEXIT_CRITICAL_ISR(&leftMotorTimerMux);    
 } // setBalanceDistance
 
 /**
@@ -713,36 +723,38 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
     if(motNum == 0)
     {
       portENTER_CRITICAL(&rightMotorTimerMux); // Prevent loop() from updating variable while we are changing it
-      stepperMotor[motNum].tripDistance = motStep;
-      stepperMotor[motNum].tripOdometer = 0;
+//      stepperMotor[motNum].tripDistance = motStep;
+//      stepperMotor[motNum].tripOdometer = 0;
       stepperMotor[motNum].motorDelay = motDelay; 
       portEXIT_CRITICAL(&rightMotorTimerMux); // Allow loop() access to variable again
     } //if
     else
     {
       portENTER_CRITICAL(&leftMotorTimerMux); // Prevent loop() from updating variable while we are changing it
-      stepperMotor[motNum].tripDistance = motStep;
-      stepperMotor[motNum].tripOdometer = 0;
+//      stepperMotor[motNum].tripDistance = motStep;
+//      stepperMotor[motNum].tripOdometer = 0;
       stepperMotor[motNum].motorDelay = motDelay; 
       portEXIT_CRITICAL(&leftMotorTimerMux); // Allow loop() access to variable again
     } //else
     AMDP_PRINTLN("<onMqttMessage> Manual motor control command");    
     AMDP_PRINT("<onMqttMessage> Motor number = ");    
     AMDP_PRINTLN(motNum);    
-    AMDP_PRINT("<onMqttMessage> Steps = ");    
-    AMDP_PRINTLN(stepperMotor[motNum].tripDistance);    
+//    AMDP_PRINT("<onMqttMessage> Steps = ");    
+//    AMDP_PRINTLN(stepperMotor[motNum].tripDistance);    
     AMDP_PRINT("<onMqttMessage> Delay (us) = ");    
     AMDP_PRINTLN(stepperMotor[motNum].motorDelay);    
   } //if
   else if(tmp == "balTelON")
   {
     AMDP_PRINTLN("<onMqttMessage> Publishing of telemetry data to MQTT broker now ON");
-    sendBalanceToMQTT = true;
+    baltelMsg.active = true;
+//    sendBalanceToMQTT = true;
   } //if
   else if(tmp == "balTelOFF")
   {
     AMDP_PRINTLN("<onMqttMessage> Publishing of telemetry data to MQTT broker now OFF");
-    sendBalanceToMQTT = false;
+    baltelMsg.active = false;
+//    sendBalanceToMQTT = false;
   } //if
   else if(tmp == "metaDataON")
   {
@@ -965,13 +977,14 @@ void publishMQTT(String topic, String msg)
 
 /**
  * @brief Calculate angle and reformat result of calculation from float to String to pass along to publishMQTT() 
- * @param angle Angle of robot lean in eulers. To convert to degrees use this formula: degrees = angle * 180 / PI
+ * @param angle Angle of robot tilt in radians. To convert to degrees use this formula: degrees = angleRadians * 180 / PI
  * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
  */
-void formatBalanceData(float angle)
-{      
-  publishMQTT("balance", String(angle * 180 / PI));
+void formatBalanceData(float angleRadians)
+{
+  float angleDegrees =  angleRadians * 180 / PI;     
+  publishMQTT("balance", String(angleDegrees));
 } //formatBalanceData()
 
 /**
@@ -1121,12 +1134,12 @@ void setupIMU()
   if (devStatus == 0) 
   {
     // Supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(XGyroOffset);
-    mpu.setYGyroOffset(YGyroOffset);
-    mpu.setZGyroOffset(ZGyroOffset);
-    mpu.setXAccelOffset(XAccelOffset);
-    mpu.setYAccelOffset(YAccelOffset);
-    mpu.setZAccelOffset(ZAccelOffset);
+    mpu.setXGyroOffset(robot.XGyroOffset);
+    mpu.setYGyroOffset(robot.YGyroOffset);
+    mpu.setZGyroOffset(robot.ZGyroOffset);
+    mpu.setXAccelOffset(robot.XAccelOffset);
+    mpu.setYAccelOffset(robot.YAccelOffset);
+    mpu.setZAccelOffset(robot.ZAccelOffset);
     // Generate offsets and calibrate MPU6050
     mpu.CalibrateAccel(6);
     mpu.CalibrateGyro(6);
@@ -1180,12 +1193,12 @@ void cfgByMAC()
   if(myMACaddress == "BCDDC2F7D6D5") // This is Andrew's bot
   {
     AMDP_PRINTLN("<cfgByMAC> Setting up MAC BCDDC2F7D6D5 configuration - Andrew");
-    XGyroOffset = -4691;
-    YGyroOffset = 1935;
-    ZGyroOffset = 1873;
-    XAccelOffset = 16383;
-    YAccelOffset = 0;
-    ZAccelOffset = 0; 
+    robot.XGyroOffset = -4691;
+    robot.YGyroOffset = 1935;
+    robot.ZGyroOffset = 1873;
+    robot.XAccelOffset = 16383;
+    robot.YAccelOffset = 0;
+    robot.ZAccelOffset = 0; 
     robot.heightCOM = 5;
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
@@ -1194,12 +1207,12 @@ void cfgByMAC()
   else if(myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
   {
     AMDP_PRINTLN("<cfgByMAC> Setting up MAC BCDDC2F7D6D5 configuration - Doug");
-    XGyroOffset = 60;
-    YGyroOffset = -10;
-    ZGyroOffset = -72;
-    XAccelOffset = -2070;
-    YAccelOffset = -70;
-    ZAccelOffset = 1641;      
+    robot.XGyroOffset = 60;
+    robot.YGyroOffset = -10;
+    robot.ZGyroOffset = -72;
+    robot.XAccelOffset = -2070;
+    robot.YAccelOffset = -70;
+    robot.ZAccelOffset = 1641;      
     robot.heightCOM = 5;
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
@@ -1208,12 +1221,12 @@ void cfgByMAC()
   else
   {
     Serial.println("<cfgByMAC> MAC not recognized. Setting up generic configuration");
-    XGyroOffset = 135;
-    YGyroOffset = -9;
-    ZGyroOffset = -85;
-    XAccelOffset = -3396;
-    YAccelOffset = 830;
-    ZAccelOffset = 1890;      
+    robot.XGyroOffset = 135;
+    robot.YGyroOffset = -9;
+    robot.ZGyroOffset = -85;
+    robot.XAccelOffset = -3396;
+    robot.YAccelOffset = 830;
+    robot.ZAccelOffset = 1890;      
     robot.heightCOM = 5;
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
@@ -1255,7 +1268,8 @@ void readIMU()
   {
     dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty  
   } //else
-  if(sendBalanceToMQTT) 
+//  if(sendBalanceToMQTT) 
+  if(baltelMsg.active == true) 
   {
     formatBalanceData(ypr[2]);
   }//if
