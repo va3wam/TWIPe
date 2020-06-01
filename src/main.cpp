@@ -2,13 +2,15 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.10
+ * @version 0.0.11
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.11  2020-05-31 AM: moved calcBalanceParmeters(ypr[2]) to loop() from readIMU(). Also added checkTiltToActivateMotors()
+ *                    to loop() so robot now enables and disables motors based on the tilt of the robot 
  * 0.0.10  2020-05-31 AM: Added portENTER_CRITICAL(&balanceMUX) and portEXIT_CRITICAL(&balanceMUX) to calcBalanceParameters. Added 
  *                    proper header and print labels to processWifiEvent(). 
  * 0.0.9   2020-05-31 AM: Added messaging structure. Removed distance and odometer from motor structure. Changed metadata messaging
@@ -72,7 +74,7 @@
 #endif
 
 // Define robot specific global parameters 
-typedef struct // Structure of physical attributes of the robot
+typedef struct 
 {
   float heightCOM = 0; // Height from ground to Center Of  Mass of robot in inches
   float wheelDiameter = 0; // Diameter of drive wheels in inches
@@ -84,8 +86,21 @@ typedef struct // Structure of physical attributes of the robot
   int16_t XAccelOffset; // Accelerometer x axis
   int16_t YAccelOffset; // Accelerometer y axis
   int16_t ZAccelOffset; // Accelerometer z axis
-} robotAttributes; 
-static volatile robotAttributes robot; // Object of physical attributes of the robot 
+} robotAttributes; // Structure of attributes of the robot
+static volatile robotAttributes robot; // Object of attributes of the robot 
+#define STATE_STAND_GROUND 0
+#define STATE_MOVE_FORWARD 1
+#define STATE_MOVE_BACKWARD 2
+#define STATE_TURN_RIGHT 3
+#define STATE_TURN_LEFT 4
+#define STATE_PARAMETER_UNUSED 0
+#define STATE_TEST_MOTOR 99
+typedef struct 
+{
+  int activity = STATE_STAND_GROUND; // The current objective that the robot is pursuing
+  int parameter = STATE_PARAMETER_UNUSED; // A parameter used by some modes such as turn left and right
+} state; // Structure for stepper motors that drive the robot
+static volatile state robotState; // Object of states the robot is in pursuing vaious goals
 
 // Define OLED constants, classes and global variables 
 SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
@@ -161,9 +176,9 @@ typedef struct
   long riseTimeMin = 0; // Least microseconds it took for the signal rise event to happen
   long fallTimeMax = 0; // Most microseconds it took for the signal fall event to happen
   long fallTimeMin = 0; // Least microseconds it took for the signal fall event to happen
-  long delayTimeMax = 0; // Most microseconds it took for the delay time event to happen
-  long delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
-  int motorDelay = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
+  int delayTimeMax = 0; // Most microseconds it took for the delay time event to happen
+  int delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
+  int delayCurrent = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
   int stepsPerRev = 0;
 } motorControl; // Structure for stepper motors that drive the robot
  static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
@@ -196,6 +211,7 @@ typedef struct
   float angleDegrees = 0; // Robot tilt angle in degrees
   float angleTargetRadians = 1.5707961; // Target angle robot wants to be at in radians. 1.5707961 is standing upright
   float angleTargetDegrees = 90; // Target angle robot wants to be at in degrees. 90 standing upright
+  float maxAngleMotorActiveDegrees = 30; // Maximum angle the robot can lean at before motors shut off 
   float distance = robot.heightCOM; // Distance in inches robot's Centre Of Mass (COM) is away from target
   float steps = distance / robot.distancePerStep; // Number of steps that it will take to get to target angle
 } balanceControl; // Structure for handling robot balancing calculations
@@ -314,9 +330,9 @@ void connectToMqtt()
 } //connectToMqtt()
 
 /**
- * @brief Keeps track of the last WiFi event that occurred and  prints it out
+ * @brief Keeps track of the last WiFi event that occurred and prints it out
  * @param event WiFi event that caused this function to be called
- * @note Called from WiFi event handler
+ * @note Called from WiFi event handler which is needed  to process MQTT messages for some reason
  
  * # WiFi Event Handling
  * All Wifi events are processed by the WiFiEvent method. A list of the events appears in the table below.
@@ -364,8 +380,7 @@ void connectToMqtt()
  * > 4 | WL_CONNECT_FAILED	4
  * > 5 | WL_CONNECTION_LOST	5
  * > 6 | WL_DISCONNECTED	6
- * 
- * */
+ */
 void WiFiEvent(WiFiEvent_t event) 
 {
   AMDP_PRINT("<WifiEvent> saw event number: ");
@@ -694,10 +709,11 @@ void connectToNetwork()
     AMDP_PRINT("<connectToNetwork>  current Wifi.status() is: ");
     AMDP_PRINTLN(WiFi.status());
     int WFs = WiFi.status();     // keep it stable during following tests
-    if(WFs == 1 || WFs == 4 || WFs == 5 || WFs == 6 || WFs == 0 )
-    {   connectToWifi();          // things went bad enough to need another connect attempt
-        delay(1500);              // give it some time to make connection
-    }
+    if(WFs == 1 || WFs == 4 || WFs == 5 || WFs == 6 || WFs == 0)
+    {   
+      connectToWifi();          // things went bad enough to need another connect attempt
+      delay(1500);              // give it some time to make connection
+    } //if
     maxConnectionAttempts--;
     wifiCurrConAttemptsCnt++;
   } //while  
@@ -708,8 +724,7 @@ void connectToNetwork()
   else
   {
     AMDP_PRINTLN("<connectToNetwork> Connection to network SUCCEEDED");
-  }
-  
+  } //else
 } //connectToNetwork() 
 
 /**
@@ -864,7 +879,6 @@ void publishMQTT(String topic, String msg)
   } //else
 } //publishMQTT()
 
-
 /**
  * @brief Control stepping of both stepper motors. 
  * @note ISR for each motor calls this routine with the motor number index.  
@@ -884,7 +898,7 @@ void stepMotor(int index, uint mod)
   {
     digitalWrite(gpioPin[index], LOW);
   } //if
-  if(stepperMotor[index].interruptCounter >= stepperMotor[index].motorDelay) // If this is the end of the delay period
+  if(stepperMotor[index].interruptCounter >= stepperMotor[index].delayCurrent) // If this is the end of the delay period
   {
     portENTER_CRITICAL_ISR(&rightMotorTimerMux);
     stepperMotor[index].interruptCounter = 0;
@@ -902,6 +916,7 @@ void stepMotor(int index, uint mod)
  * @brief ISR for right stepper motor that drives the robot
  * 
  */
+//TODO Put balance logic in here
 void IRAM_ATTR rightMotorTimerISR() 
 {
   int motor = 0;
@@ -910,9 +925,10 @@ void IRAM_ATTR rightMotorTimerISR()
 } //rightMotorTimerISR()
 
 /** 
- * @brief ISR for left stepper motor that drives the robot
+ * @brief ISR for left stepper m otor that drives the robot
  * 
  */
+//TODO Put balance logic in here
 void IRAM_ATTR leftMotorTimerISR() 
 {
   int motor = 1;
@@ -1169,6 +1185,12 @@ void cfgByMAC()
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
     stepperMotor[LEFT_MOTOR].stepsPerRev = 200; 
+    stepperMotor[RIGHT_MOTOR].delayTimeMin = 300;
+    stepperMotor[LEFT_MOTOR].delayTimeMin = 300;
+    stepperMotor[RIGHT_MOTOR].delayTimeMax = 600;
+    stepperMotor[LEFT_MOTOR].delayTimeMax = 600;
+    stepperMotor[RIGHT_MOTOR].delayCurrent = 600;
+    stepperMotor[LEFT_MOTOR].delayCurrent = 600;  
   } //if
   else if(myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
   {
@@ -1183,6 +1205,12 @@ void cfgByMAC()
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
     stepperMotor[LEFT_MOTOR].stepsPerRev = 200;
+    stepperMotor[RIGHT_MOTOR].delayTimeMin = 300;
+    stepperMotor[LEFT_MOTOR].delayTimeMin = 300;
+    stepperMotor[RIGHT_MOTOR].delayTimeMax = 600;
+    stepperMotor[LEFT_MOTOR].delayTimeMax = 600;
+    stepperMotor[RIGHT_MOTOR].delayCurrent = 600;
+    stepperMotor[LEFT_MOTOR].delayCurrent = 600;  
   } //else if
   else
   {
@@ -1197,6 +1225,12 @@ void cfgByMAC()
     robot.wheelDiameter = 3.75;
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
     stepperMotor[LEFT_MOTOR].stepsPerRev = 200;
+    stepperMotor[RIGHT_MOTOR].delayTimeMin = 300;
+    stepperMotor[LEFT_MOTOR].delayTimeMin = 300;
+    stepperMotor[RIGHT_MOTOR].delayTimeMax = 600;
+    stepperMotor[LEFT_MOTOR].delayTimeMax = 600;
+    stepperMotor[RIGHT_MOTOR].delayCurrent = 600;
+    stepperMotor[LEFT_MOTOR].delayCurrent = 600;  
   } //else
   robot.wheelCircumference = robot.wheelDiameter * PI; 
   robot.distancePerStep = robot.wheelCircumference / stepperMotor[RIGHT_MOTOR].stepsPerRev;
@@ -1218,23 +1252,27 @@ void updateLED()
 
 /**
  * @brief Retrieve DMP FIFO data
+ * @return boolean rCode. True means there is new DMP data. false means that there is not
  */
 // TODO learn about the three different dmpGet commands used here. Do we need them all? What do they do? an we call only 1? 
-void readIMU()
+boolean readIMU()
 {
-  if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer. 
+  boolean rCode = false; 
+  if(mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer. 
   {  
     mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
     mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
     dmpFifoDataPresentCnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
-    calcBalanceParmeters(ypr[2]);
+    rCode = true  ;
+//    calcBalanceParmeters(ypr[2]); // Do balancing calculations
   } //if
   else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
   {
     dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty  
   } //else
   goIMU = millis() + tmrIMU; // Reset IMU update counter  
+  return rCode;
 } // readIMU()
 
 /**    
@@ -1314,6 +1352,32 @@ void setupDriverMotors()
   attachInterrupt(gp_DRV2_FAULT, leftDRV8825fault, FALLING);
 } //setupDriverMotors()
 
+/**
+ * @brief Enable or disable motor based on robot angle
+ */
+void checkTiltToActivateMotors()
+{
+  if(robotBalance.angleDegrees < 90 + robotBalance.maxAngleMotorActiveDegrees && 
+     robotBalance.angleDegrees > 90 - robotBalance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance 
+  {
+    if(digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
+    {
+      AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+      digitalWrite(gp_DRV1_ENA,LOW);
+      digitalWrite(gp_DRV2_ENA,LOW);
+    } //if
+  } //if
+  else // otherwise robot has such a big tilt that it should not be trying to balance
+  {
+    if(digitalRead(gp_DRV1_ENA) == LOW) // If motor is currently turned off
+    {
+      AMDP_PRINTLN("<checkTiltToActivateMotors> Disable stepper motors");
+      digitalWrite(gp_DRV1_ENA,HIGH);
+      digitalWrite(gp_DRV2_ENA,HIGH);
+    } //if 
+  } //else
+} //checkTiltToActivateMotors()
+
 /** 
  * @brief Standard set up routine for Arduino programs 
  */
@@ -1346,7 +1410,15 @@ void loop()
 {
   cntLoop ++; // Increment loop() counter
   if(WifiLastEvent != -1) processWifiEvent();    // if there's a pending Wifi event, handle it
-  if((millis() >= goIMU) && mpuInterrupt == true) readIMU(); // Read the IMU. Balancing and data printing is handled in here as well
+  if((millis() >= goIMU) && mpuInterrupt == true) 
+  {
+    boolean rCode = readIMU(); // Read the IMU. Balancing and data printing is handled in here as well
+    if(rCode)
+    {
+      calcBalanceParmeters(ypr[2]); // Do balancing calculations
+      checkTiltToActivateMotors(); // Enable or disable motor based on robot angle
+    } //if    
+  } //if
   if(millis() >= goOLED) updateOLED(ypr[2]);   // Control OLED display
   if(millis() >= goLED) updateLED();           // Update the OLED with data
   if(millis() >= goMETADATA) updateMetaData(); // Send data to serial terminal
