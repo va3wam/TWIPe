@@ -2,13 +2,14 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.11
+ * @version 0.0.12
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.12  2020-06-01 AM: Corrected wheel diameter value. Moved min/max PWM data to new metadata structure.
  * 0.0.11  2020-05-31 AM: moved calcBalanceParmeters(ypr[2]) to loop() from readIMU(). Also added checkTiltToActivateMotors()
  *                    to loop() so robot now enables and disables motors based on the tilt of the robot 
  * 0.0.10  2020-05-31 AM: Added portENTER_CRITICAL(&balanceMUX) and portEXIT_CRITICAL(&balanceMUX) to calcBalanceParameters. Added 
@@ -77,7 +78,7 @@
 typedef struct 
 {
   float heightCOM = 0; // Height from ground to Center Of  Mass of robot in inches
-  float wheelDiameter = 0; // Diameter of drive wheels in inches
+  float wheelDiameter = 3.937008; // Diameter of drive wheels in inches. https://www.robotshop.com/en/100mm-diameter-wheel-5mm-hub.html
   float wheelCircumference; // Diameter x pi 
   float distancePerStep = 0; // Distance travelled per step of motor in inches
   int16_t XGyroOffset; // Gyroscope x axis (Roll)
@@ -172,13 +173,9 @@ portMUX_TYPE rightDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate ri
 typedef struct
 {
   long interruptCounter; // Counter for step signals to the DRV8825 motor driver
-  long riseTimeMax = 0; // Most microseconds it took for the signal rise event to happen
-  long riseTimeMin = 0; // Least microseconds it took for the signal rise event to happen
-  long fallTimeMax = 0; // Most microseconds it took for the signal fall event to happen
-  long fallTimeMin = 0; // Least microseconds it took for the signal fall event to happen
-  int delayTimeMax = 0; // Most microseconds it took for the delay time event to happen
-  int delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
-  int delayCurrent = 600; // Delay time (microseconds) used for motor speed (speed is inverse of this number)
+  int minSpeed = 300; // Minimum speed the motor should run at to be effective
+  int speedRange = 300; // Range of speed the motor is effective at. Add to minSpeed to get max speed
+  int interval = 600; // Delay time (microseconds) used for motor PWM. The smaller this number is the faster the motor goes
   int stepsPerRev = 0;
 } motorControl; // Structure for stepper motors that drive the robot
  static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor 
@@ -219,6 +216,8 @@ static volatile balanceControl robotBalance; // Object for calculating robot bal
 portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop() 
 
 // Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment. 
+typedef struct
+{
 int wifiConAttemptsCnt = 0; // Track the number of over all attempts made to connect to the WiFi Access Point
 int mqttConAttemptsCnt = 0; // Track the number of attempts made to connect to the MQTT broker 
 int dmpFifoDataMissingCnt = 0; // Track how many times the FIFO pin goes high but the buffer is empty 
@@ -228,7 +227,15 @@ int mqttDropCnt = 0; // Track how many times connection to the MQTT server is lo
 int unknownCmdCnt = 0; // Track how many unknown command have been recieved
 int leftDRVfault = 0; // Track how many times the left DVR8825 motor driver signals a fault
 int rightDRVfault = 0; // Track how many times the right DVR8825 motor driver signals a fault
-
+//TODO Put datapoint below to use
+long riseTimeMax = 0; // Most microseconds it took for the signal rise event to happen
+long riseTimeMin = 0; // Least microseconds it took for the signal rise event to happen
+long fallTimeMax = 0; // Most microseconds it took for the signal fall event to happen
+long fallTimeMin = 0; // Least microseconds it took for the signal fall event to happen
+int delayTimeMax = 0; // Most microseconds it took for the delay time event to happen
+int delayTimeMin = 0; // Least microseconds it took for the delay time event to happen
+} metadataStructure; //Structure for tracking key points of interest regarding robot performance
+static volatile metadataStructure metadata; // Object for tracking metadata about robot performance
 // Define flags that are used to track what devices/functions are verified working after start up. Initilize false.  
 boolean leftOLED_detected = false;
 boolean rightOLED_detected = false;
@@ -274,7 +281,7 @@ String formatMAC()
 void IRAM_ATTR leftDRV8825fault() 
 {
   portENTER_CRITICAL_ISR(&leftDRVMux);
-  leftDRVfault++;
+  metadata.leftDRVfault++;
   portEXIT_CRITICAL_ISR(&leftDRVMux);
 } // leftDRV8825fault()
 
@@ -285,7 +292,7 @@ void IRAM_ATTR leftDRV8825fault()
 void IRAM_ATTR rightDRV8825fault() 
 {
   portENTER_CRITICAL_ISR(&rightDRVMux);
-  rightDRVfault++;
+  metadata.rightDRVfault++;
   portEXIT_CRITICAL_ISR(&rightDRVMux);
 } // rightDRV8825fault()
 
@@ -310,9 +317,9 @@ String ipToString(IPAddress ip)
  */
 void connectToWifi() 
 {
-  wifiConAttemptsCnt ++; // Increment the number of attempts made to connect to the Access Point 
+  metadata.wifiConAttemptsCnt ++; // Increment the number of attempts made to connect to the Access Point 
   AMDP_PRINT("<connectToWiFi> Attempt #");
-  AMDP_PRINT(wifiConAttemptsCnt);
+  AMDP_PRINT(metadata.wifiConAttemptsCnt);
   AMDP_PRINTLN(" to connect to a WiFi Access Point");
   WiFi.begin(mySSID, myPassword);
 } //connectToWifi()
@@ -326,7 +333,7 @@ void connectToMqtt()
 {
   AMDP_PRINTLN("<connectToMqtt> Connecting to MQTT...");
   mqttClient.connect();
-  mqttConAttemptsCnt ++; // Increment the number of attempts made to connect to the MQTT broker 
+  metadata.mqttConAttemptsCnt ++; // Increment the number of attempts made to connect to the MQTT broker 
 } //connectToMqtt()
 
 /**
@@ -419,7 +426,7 @@ void processWifiEvent()                    // called fron loop() to handle event
 //      xTimerStop(mqttReconnectTimer, blockTime); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi. Disconnect triggers new connect atempt
 //      xTimerStart(wifiReconnectTimer, blockTime); // Activate wifi timer (which only runs 1 time)
       wifi_connected = false;
-      wifiDropCnt ++; // Increment the number of network drops that have occured
+      metadata.wifiDropCnt ++; // Increment the number of network drops that have occured
       break;      
     } //case
     case SYSTEM_EVENT_STA_GOT_IP:
@@ -432,7 +439,7 @@ void processWifiEvent()                    // called fron loop() to handle event
       WiFi.setHostname((char*)tmpHostNameVar.c_str());
       myHostName = WiFi.getHostname();
       Serial.print("<processWiFiEvent> Network connecion attempt #");
-      Serial.print(wifiConAttemptsCnt);
+      Serial.print(metadata.wifiConAttemptsCnt);
       Serial.print(" SUCCESSFUL after this many tries: ");
       Serial.println(wifiCurrConAttemptsCnt);
       Serial.println("<processWiFiEvent> Network information is as follows..."); 
@@ -514,13 +521,13 @@ void onMqttConnect(bool sessionPresent)
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) 
 {
   AMDP_PRINTLN("<onMqttDisconnect> Disconnected from MQTT");
-  mqttDropCnt ++; // Increment the counter for the number of MQTT connection drops
-  mqttConAttemptsCnt++;
+  metadata.mqttDropCnt ++; // Increment the counter for the number of MQTT connection drops
+  metadata.mqttConAttemptsCnt++;
   if (WiFi.isConnected()) 
   {
     xTimerStart(mqttReconnectTimer, 0); // Activate mqtt timer (which only runs 1 time)
   } //if
-  mqttConAttemptsCnt = 0; // Reset the number of attempts made to connect to the MQTT broker 
+  metadata.mqttConAttemptsCnt = 0; // Reset the number of attempts made to connect to the MQTT broker 
 } //onMqttDisconnect()
 
 /**
@@ -673,7 +680,7 @@ void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties 
   else
   {
     AMDP_PRINTLN("<onMqttMessage> Unknown command. Doing nothing");
-    unknownCmdCnt++; // Increment the counter that tracks how many unknown commands have been recieved
+    metadata.unknownCmdCnt++; // Increment the counter that tracks how many unknown commands have been recieved
   } //else
 } //onMqttMessage()
 
@@ -898,7 +905,7 @@ void stepMotor(int index, uint mod)
   {
     digitalWrite(gpioPin[index], LOW);
   } //if
-  if(stepperMotor[index].interruptCounter >= stepperMotor[index].delayCurrent) // If this is the end of the delay period
+  if(stepperMotor[index].interruptCounter >= stepperMotor[index].interval) // If this is the end of the delay period
   {
     portENTER_CRITICAL_ISR(&rightMotorTimerMux);
     stepperMotor[index].interruptCounter = 0;
@@ -991,15 +998,15 @@ void calcBalanceParmeters(float angleRadians)
  */
 void updateMetaData()
 {
-  String tmp = String(wifiConAttemptsCnt);
-  tmp += "," + String(wifiDropCnt);
-  tmp += "," + String(mqttConAttemptsCnt);
-  tmp += "," + String(mqttDropCnt);
-  tmp += "," + String(dmpFifoDataPresentCnt);
-  tmp += "," + String(dmpFifoDataMissingCnt); 
-  tmp += "," + String(unknownCmdCnt); 
-  tmp += "," + String(leftDRVfault); 
-  tmp += "," + String(rightDRVfault); 
+  String tmp = String(metadata.wifiConAttemptsCnt);
+  tmp += "," + String(metadata.wifiDropCnt);
+  tmp += "," + String(metadata.mqttConAttemptsCnt);
+  tmp += "," + String(metadata.mqttDropCnt);
+  tmp += "," + String(metadata.dmpFifoDataPresentCnt);
+  tmp += "," + String(metadata.dmpFifoDataMissingCnt); 
+  tmp += "," + String(metadata.unknownCmdCnt); 
+  tmp += "," + String(metadata.leftDRVfault); 
+  tmp += "," + String(metadata.rightDRVfault); 
   if(metadataMsg.active) // If configured to write metadata 
   {
     if(metadataMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
@@ -1182,15 +1189,13 @@ void cfgByMAC()
     robot.YAccelOffset = 0;
     robot.ZAccelOffset = 0; 
     robot.heightCOM = 5;
-    robot.wheelDiameter = 3.75;
+    robot.wheelDiameter = 3.937008; // 100mm in inches
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
     stepperMotor[LEFT_MOTOR].stepsPerRev = 200; 
-    stepperMotor[RIGHT_MOTOR].delayTimeMin = 300;
-    stepperMotor[LEFT_MOTOR].delayTimeMin = 300;
-    stepperMotor[RIGHT_MOTOR].delayTimeMax = 600;
-    stepperMotor[LEFT_MOTOR].delayTimeMax = 600;
-    stepperMotor[RIGHT_MOTOR].delayCurrent = 600;
-    stepperMotor[LEFT_MOTOR].delayCurrent = 600;  
+    stepperMotor[RIGHT_MOTOR].minSpeed = 300; // Min effective speed of motor
+    stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use 
+    stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
+    stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
   } //if
   else if(myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
   {
@@ -1202,15 +1207,13 @@ void cfgByMAC()
     robot.YAccelOffset = -70;
     robot.ZAccelOffset = 1641;      
     robot.heightCOM = 5;
-    robot.wheelDiameter = 3.75;
+    robot.wheelDiameter = 3.937008; // 100mm in inches
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
-    stepperMotor[LEFT_MOTOR].stepsPerRev = 200;
-    stepperMotor[RIGHT_MOTOR].delayTimeMin = 300;
-    stepperMotor[LEFT_MOTOR].delayTimeMin = 300;
-    stepperMotor[RIGHT_MOTOR].delayTimeMax = 600;
-    stepperMotor[LEFT_MOTOR].delayTimeMax = 600;
-    stepperMotor[RIGHT_MOTOR].delayCurrent = 600;
-    stepperMotor[LEFT_MOTOR].delayCurrent = 600;  
+    stepperMotor[LEFT_MOTOR].stepsPerRev = 200; 
+    stepperMotor[RIGHT_MOTOR].minSpeed = 300; // Min effective speed of motor
+    stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use 
+    stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
+    stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
   } //else if
   else
   {
@@ -1222,15 +1225,13 @@ void cfgByMAC()
     robot.YAccelOffset = 830;
     robot.ZAccelOffset = 1890;      
     robot.heightCOM = 5;
-    robot.wheelDiameter = 3.75;
+    robot.wheelDiameter = 3.937008; //100mm in inches
     stepperMotor[RIGHT_MOTOR].stepsPerRev = 200;
-    stepperMotor[LEFT_MOTOR].stepsPerRev = 200;
-    stepperMotor[RIGHT_MOTOR].delayTimeMin = 300;
-    stepperMotor[LEFT_MOTOR].delayTimeMin = 300;
-    stepperMotor[RIGHT_MOTOR].delayTimeMax = 600;
-    stepperMotor[LEFT_MOTOR].delayTimeMax = 600;
-    stepperMotor[RIGHT_MOTOR].delayCurrent = 600;
-    stepperMotor[LEFT_MOTOR].delayCurrent = 600;  
+    stepperMotor[LEFT_MOTOR].stepsPerRev = 200; 
+    stepperMotor[RIGHT_MOTOR].minSpeed = 300; // Min effective speed of motor
+    stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use 
+    stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
+    stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
   } //else
   robot.wheelCircumference = robot.wheelDiameter * PI; 
   robot.distancePerStep = robot.wheelCircumference / stepperMotor[RIGHT_MOTOR].stepsPerRev;
@@ -1263,13 +1264,13 @@ boolean readIMU()
     mpu.dmpGetQuaternion(&q, fifoBuffer); // Get the latest packet of Quaternion data
     mpu.dmpGetGravity(&gravity, &q); // Get the latest packet of gravity data 
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles 
-    dmpFifoDataPresentCnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
+    metadata.dmpFifoDataPresentCnt++; // Track how many times the FIFO pin goes high and the buffer has data in it
     rCode = true  ;
 //    calcBalanceParmeters(ypr[2]); // Do balancing calculations
   } //if
   else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
   {
-    dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty  
+    metadata.dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty  
   } //else
   goIMU = millis() + tmrIMU; // Reset IMU update counter  
   return rCode;
