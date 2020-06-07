@@ -318,7 +318,7 @@ String formatMAC()
 
 /**
  * @brief ISR for left DRV8825 fault condition
- */
+===================================================================================================*/
 void IRAM_ATTR leftDRV8825fault()
 {
   //  portENTER_CRITICAL_ISR(&leftDRVMux);
@@ -330,7 +330,7 @@ void IRAM_ATTR leftDRV8825fault()
 /**
  * @brief ISR for right DRV8825 fault condition
  * 
- */
+=================================================================================================== */
 void IRAM_ATTR rightDRV8825fault()
 {
   //  portENTER_CRITICAL_ISR(&rightDRVMux);
@@ -356,7 +356,7 @@ String ipToString(IPAddress ip)
 
 /**
  * @brief Connect to WiFi Access Point 
- */
+=================================================================================================== */
 void connectToWifi()
 {
   metadata.wifiConAttemptsCnt++; // Increment the number of attempts made to connect to the Access Point
@@ -370,7 +370,7 @@ void connectToWifi()
  * @brief Connect to MQTT broker
  * @note MQTT Spec: https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718063
  * @note Reference for MQTT comments in this code: https://www.hivemq.com/mqtt-essentials/
- */
+=================================================================================================== */
 void connectToMqtt()
 {
   AMDP_PRINTLN("<connectToMqtt> Connecting to MQTT...");
@@ -429,7 +429,7 @@ void connectToMqtt()
  * > 4 | WL_CONNECT_FAILED	4
  * > 5 | WL_CONNECTION_LOST	5
  * > 6 | WL_DISCONNECTED	6
- */
+=================================================================================================== */
 void WiFiEvent(WiFiEvent_t event)
 {
   AMDP_PRINT("<WifiEvent> saw event number: ");
@@ -447,7 +447,7 @@ void WiFiEvent(WiFiEvent_t event)
 /**
  * @brief Actually handles WiFi events using the last known wifi event that was set in WiFiEvent()
  * @note Called from loop()
- */
+=================================================================================================== */
 void processWifiEvent() // called fron loop() to handle event ID stored in WifiLastEvent
 {
   int event = WifiLastEvent; // retrieve last event that occurred
@@ -545,7 +545,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
  * |  3  | Connection refused, server unavailable |
  * |  4  | Connection refused, bad user name or password |
  * |  5  | Connection refused, not authorized |
- */
+=================================================================================================== */
 void onMqttConnect(bool sessionPresent)
 {
   AMDP_PRINTLN("<onMqttConnect> Connected to MQTT");
@@ -561,7 +561,7 @@ void onMqttConnect(bool sessionPresent)
 /**
  * @brief Handle disconnecting from an MQTT broker
  * @param reason Reason for disconnect
- */
+=================================================================================================== */
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 {
   AMDP_PRINTLN("<onMqttDisconnect> Disconnected from MQTT");
@@ -597,7 +597,7 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
  * |  1  |  Success - Maximum QoS 1 |
  * |  2  |  Success - Maximum QoS 2 |
  * | 128 |  Failure |
- */
+=================================================================================================== */
 void onMqttSubscribe(uint16_t packetId, uint8_t qos)
 {
   AMDP_PRINTLN("<onMqttSubscribe> Subscribe acknowledged by broker.");
@@ -614,7 +614,7 @@ void onMqttSubscribe(uint16_t packetId, uint8_t qos)
  * To confirm the unsubscribe, the broker sends an UNSUBACK acknowledgement message to the client. This message contains only the 
  * packet identifier of the original UNSUBSCRIBE message (to clearly identify the message). After receiving the UNSUBACK from the 
  * broker, the client can assume that the subscriptions in the UNSUBSCRIBE message are deleted.
- */
+=================================================================================================== */
 void onMqttUnsubscribe(uint16_t packetId)
 {
   AMDP_PRINTLN("Unsubscribe acknowledged.");
@@ -658,7 +658,7 @@ void onMqttUnsubscribe(uint16_t packetId)
  * | metaDataOFF            | Causes metadata to stop being published to the MQTT broker |  
  * | metaDataCON            | Causes metadata to be published to the local console |
  * | metaDataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
- */
+=================================================================================================== */
 void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
 {
   AMDP_PRINT("<onMqttMessage> Publish received.");
@@ -731,7 +731,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 /**
  * @brief Handle the reciept of a PUBACK message message from MQTT broker
  * @param packetId Unique identifier of the message.
- */
+=================================================================================================== */
 void onMqttPublish(uint16_t packetId)
 {
   AMDP_PRINTLN("Publish acknowledged.");
@@ -741,7 +741,7 @@ void onMqttPublish(uint16_t packetId)
 
 /**
  * @brief Manage multiple attempts to connect to the WiFi network  
- */
+=================================================================================================== */
 void connectToNetwork()
 {
   int maxConnectionAttempts = 20; // Maximum number of Access Point connection attemts
@@ -806,7 +806,7 @@ String translateEncryptionType(wifi_auth_mode_t encryptionType)
 /**
  * @brief This function scans the WiFi spectrum looking for Access Points (AP). It selects the AP with the 
  * strongest signal which is included in the known network list.
- */
+=================================================================================================== */
 void scanNetworks()
 {
   int numberOfNetworks = WiFi.scanNetworks(); // Used to track how many APs are detected by the scan
@@ -864,7 +864,7 @@ void scanNetworks()
  * @note Code taken from Peter H Anderson example
  * @arg int8_t v = number to dispay
  * @arg int8_t num_places = number of bits to display (normally a multile of 8)
- */
+=================================================================================================== */
 void printBinary(byte v, int8_t num_places)
 {
   int8_t mask = 0, n;
@@ -905,7 +905,7 @@ void printBinary(byte v, int8_t num_places)
  * |:-----------------------|:---------------------------------|:--------------------------------------------------------------------|
  * | Balance telemetry      | {robot name}/telemetry/balance   | Angle of IMU orientation in degrees                                 |
  * | Robot Metadata         | {robot name}/metadata            | See metadata table for a full list of the data points being tracked |
- */
+=================================================================================================== */
 void publishMQTT(String topic, String msg)
 {
   char tmp[NUMBER_OF_MILLI_DIGITS];
@@ -935,7 +935,7 @@ void publishMQTT(String topic, String msg)
  * @note ISR for each motor calls this routine with the motor number index.  
  * @param index Which motor the interrupt is for. 0 = right motor, 1 = left motor
  * @param mod Odometer modifier. Handle updating the trip odometer for both polarities (directions)
- */
+=================================================================================================== */
 void stepMotor(int index, uint mod)
 {
   uint8_t gpioPin[2]; // Create 2 element array to hold values of the left and right motor pins
@@ -966,7 +966,7 @@ void stepMotor(int index, uint mod)
 /** 
  * @brief ISR for right stepper motor that drives the robot
  * 
- */
+=================================================================================================== */
 //TODO Put balance logic in here
 void IRAM_ATTR rightMotorTimerISR()
 {
@@ -990,7 +990,7 @@ void IRAM_ATTR rightMotorTimerISR()
 /** 
  * @brief ISR for left stepper m otor that drives the robot
  * 
- */
+=================================================================================================== */
 //TODO Put balance logic in here
 void IRAM_ATTR leftMotorTimerISR()
 {
@@ -1017,7 +1017,7 @@ void IRAM_ATTR leftMotorTimerISR()
  * @note We are working with Yaw/Pitch/Roll data (and only using roll). Other options include euler, 
  * quaternion, raw acceleration, raw gyro, linear acceleration and gravity. 
  * See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
- */
+=================================================================================================== */
 void calcBalanceParmeters(float angleRadians)
 {
 //de suggest removing function argument, and using stored tilt value
@@ -1070,7 +1070,7 @@ void calcBalanceParmeters(float angleRadians)
  * | Unknown command          | Number of unrecognized commands have been recieved. |
  * | Left DRV8825 fault       | Number of fault signals sent by the left DVR8825 stepper motor driver |
  * | Right DRV8825 fault      | Number of fault signals sent by the right DVR8825 stepper motor driver |
- */
+=================================================================================================== */
 void updateMetaData()
 {
   String tmp = String(metadata.wifiConAttemptsCnt);
@@ -1102,19 +1102,20 @@ void updateMetaData()
  * @param angle Angle of robot lean in radians. To convert to degrees use this formula: degrees = angle * 180 / PI
  * @note We are working with Yaw/Pitch/Roll data (and only using roll). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
- */
+=================================================================================================== */
 void updateOLED(float angle)
 {
   //de skip arg processing, use tilt in degrees directly?
   rightOLED.clear();
-  rightOLED.drawString(64, 20, String(angle * 180 / PI));
+  //de next line was:  rightOLED.drawString(64, 20, String(angle * 180 / PI));
+  rightOLED.drawString(64, 20, String(tilt));
   rightOLED.display();
   goOLED = millis() + tmrOLED; // Reset OLED update target time
 } //UpdateOLED()
 
 /**
  * @brief Set up a WiFi connection
- */
+=================================================================================================== */
 void setupWiFi()
 {
   scanNetworks();
@@ -1125,7 +1126,7 @@ void setupWiFi()
  * @brief Function called when a message appears on the command topic subsription 
  * @param topic 
  * @param message 
- */
+=================================================================================================== */
 void subscribed_callback(char *data, uint16_t len)
 {
   // Print out topic name and message
@@ -1136,7 +1137,7 @@ void subscribed_callback(char *data, uint16_t len)
 /**
  * @brief Set up communication with an MQTT broker
  * Refer to: https://learn.adafruit.com/introducing-the-adafruit-wiced-feather-wifi/adafruitmqtt
- */
+=================================================================================================== */
 void setupMQTT()
 {
   mqttClient.onConnect(onMqttConnect);
@@ -1150,7 +1151,7 @@ void setupMQTT()
 
 /**
  * @brief Set up the LED that is flashed by loop()
- */
+=================================================================================================== */
 void setupLED()
 {
   AMDP_PRINTLN("<setupLED> Enable LED pin");
@@ -1159,7 +1160,7 @@ void setupLED()
 
 /**
  * @brief Set up the OLED 
- */
+=================================================================================================== */
 void setupOLED()
 {
   AMDP_PRINTLN("<setupOLED> Initialize OLED");
@@ -1173,7 +1174,7 @@ void setupOLED()
 
 /**
  * @brief Set up the MPU6050 using DMP firmware but NO interrupts
- */
+=================================================================================================== */
 void setupIMU()
 {
   // Initialize device
@@ -1249,7 +1250,7 @@ void setupIMU()
 
 /**
  * @brief Set up robot specific configuration based on the ESP32 MAC address
- */
+=================================================================================================== */
 void cfgByMAC()
 {
   myMACaddress = formatMAC();
@@ -1317,7 +1318,7 @@ void cfgByMAC()
 
 /**
  * @brief Flash AMBER LED on fron panel button
- */
+=================================================================================================== */
 void updateLED()
 {
   blinkState = !blinkState;
@@ -1356,7 +1357,7 @@ boolean readIMU()
  * @brief Create FreeRTOS timers that run callback functions in their own seperate FreeRTOS threads. 
  * @note For details abut FreeRTOS timers see https://www.freertos.org/FreeRTOS-timers-xTimerCreate.html
  * @note Timers are created but are not started at this point. xTimerStart is used later to start them.
- */
+=================================================================================================== */
 void setupFreeRTOStimers()
 {
   int const wifiTimerPeriod = 2000;                                    // Time in milliseconds between wifi timer events
@@ -1383,7 +1384,7 @@ void setupFreeRTOStimers()
 
 /** @brief Configure GPIO pins for stepper motors
  * 
- */
+=================================================================================================== */
 void setupDriverMotors()
 {
   // Set up GPIO pins for the robot's right motor
@@ -1431,7 +1432,7 @@ void setupDriverMotors()
 
 /**
  * @brief Enable or disable motor based on robot angle
- */
+=================================================================================================== */
 void checkTiltToActivateMotors()
 {
 //de  if (Balance.angleDegrees < 90 + Balance.maxAngleMotorActiveDegrees &&
@@ -1463,7 +1464,7 @@ void checkTiltToActivateMotors()
  * | Item                     | Details                                                                                               |
  * |:-------------------------|:------------------------------------------------------------------------------------------------------|
  * | stand                    | Tries to maintain an angle of 90 degrees and a COM distance from target of 0 inches |
- */
+=================================================================================================== */
 void setRobotObjective(int objective)
 {
   switch (objective)
@@ -1486,7 +1487,7 @@ void setRobotObjective(int objective)
 
 /** 
  * @brief Standard set up routine for Arduino programs 
- */
+=================================================================================================== */
 void setup()
 {
   Wire.begin(gp_I2C_IMU_SDA, gp_I2C_IMU_SCL, I2C_bus1_speed);
@@ -1513,7 +1514,7 @@ void setup()
 
 /**
  * @brief Standard looping routine for Arduino programs
- */
+=================================================================================================== */
 void loop()
 {
   cntLoop++; // Increment loop() counter
