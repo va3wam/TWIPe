@@ -188,6 +188,14 @@ int wifiCurrConAttemptsCnt = 0;    // Number of Acess Point connection attempts 
 int WifiLastEvent = -1;            // last seen Wifi event, that needs to be handled in loop()
                                    // 0 = Wifi ready, 4 = connected, 5 = disconnected, 7 = got IP address
 
+char const* wifiSt[]               // WiFi status code translations
+{ "WL_IDLE_STATUS","WL_IDLE_STATUS","WL_SCAN_COMPLETED","WL_CONNECTED","WL_CONNECT_FAILED","WL_CONNECTION_LOST","WL_DISCONNECTED"
+};
+
+char const* wifiEv[]               // WiFi event number translations
+{"WiFi ready","AP scan done","station start","station stop","connected to AP","disconnected from AP","auth mode changed","got IP","lost IP"
+};
+
 // Define MQTT constants, classes and global variables.
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
 // Note sends balance telemetry data to <device name><telemetry/balance>
@@ -433,13 +441,14 @@ void connectToMqtt()
 void WiFiEvent(WiFiEvent_t event)
 {
   AMDP_PRINT("<WifiEvent> saw event number: ");
-  AMDP_PRINTLN(event);
+  AMDP_PRINT(event);
+  AMDP_PRINTLN(String(" = ") + wifiEv[event]);
   if (WifiLastEvent != -1)
   {
     AMDP_PRINT("<WiFiEvent> ********* Overwrote an unprocessed event *********  ");
-    AMDP_PRINT(WifiLastEvent);
+    AMDP_PRINT(wifiEv[WifiLastEvent]);
     AMDP_PRINT(" was replaced by: ");
-    AMDP_PRINTLN(event);
+    AMDP_PRINTLN(wifiEv[event]);
   }
   WifiLastEvent = event; // remember what event it was, and signal loop() to process it
 } //WiFiEvent()
@@ -482,7 +491,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     tmpHostNameVar = myHostNameSuffix + myMACaddress;
     WiFi.setHostname((char *)tmpHostNameVar.c_str());
     myHostName = WiFi.getHostname();
-    Serial.print("<processWiFiEvent> Network connecion attempt #");
+    Serial.print("<processWiFiEvent> Network connection attempt #");
     Serial.print(metadata.wifiConAttemptsCnt);
     Serial.print(" SUCCESSFUL after this many tries: ");
     Serial.println(wifiCurrConAttemptsCnt);
@@ -758,7 +767,7 @@ void connectToNetwork()
     AMDP_PRINT("<connectToNetwork> Re-attempting connection to Access Point. Connect attempt count down = ");
     AMDP_PRINTLN(maxConnectionAttempts);
     AMDP_PRINT("<connectToNetwork>  current Wifi.status() is: ");
-    AMDP_PRINTLN(WiFi.status());
+    AMDP_PRINTLN(wifiSt[WiFi.status()]);
     int WFs = WiFi.status(); // keep it stable during following tests
     if (WFs == 1 || WFs == 4 || WFs == 5 || WFs == 6 || WFs == 0)
     {
