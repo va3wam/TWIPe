@@ -12,11 +12,11 @@
   * 0.0.13  2020-06-02 DE: jump the Version number to sync up with master on Git
   *                    - trim so source lines don't exceed 140 characters
   *                    - rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
-  *                      standard of prefixing the prefix with "robot". Need to discuss merits of the COBOL approach.
-  *                    - add Balance.state to track what part of balancing process we're in
+  *                      standard of prefixing the prefix with "robot". 
+  *                    - add Balance.state to track what part of balancing process we're in, and checkBalanceState() called from loop()
   *                    - add second balancing method, by angle, with control by Balance.method variable, and 2 part motor ISR's
   *                       key new routine is balanceByAngle() called from loop()
-  *                    - add display of motor "speed" variable to OLED
+  *                    - add display of motor "speed" variable to OLED, and current PID value
   *                    - add smoothing to motor speed changes
   * 0.0.8   2020-05-29 DE: update my bot's calibraton data and correct printout
   *                    add three methods to calculate tile angle:
@@ -298,11 +298,12 @@ volatile balanceControl Balance;             // Object for calculating robot bal
 volatile int throttle_Lcounter, throttle_Rcounter;        // working counter of timer ticks in motor controller ISRs
 volatile int throttle_Llimit, throttle_Rlimit;            // limit that determines step length in timer ticks
 volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
+float pid;                                                  // global so updateOLED() can find it
 
-float pid_p_gain = 20;       //de multiplier for the P part of PID
+float pid_p_gain = 50;       //de multiplier for the P part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
-int bot_slow = 520;          //de  need to fit these into structures, but quick & dirty now
-int bot_fast = 500;
+int bot_slow =600;          //de  need to fit these into structures, but quick & dirty now
+int bot_fast = 300;
 float smoother = .5;          // smooth changes in speed by using new = old + smoother * (new - old)  
 int lastSpeed = 0;            // memory for above method using smoother
 
@@ -1140,7 +1141,7 @@ void balanceByAngle()
 {
   //de (work in progress)
   float angleErr = tilt - 0;              // this the difference between where we are, and where we want to be (anglewise)
-  float pid = pid_p_gain * angleErr;      // apply the multiplier for the P in PID
+  pid = pid_p_gain * angleErr;      // apply the multiplier for the P in PID
                                           // ignore the I and D in PID, for now
   if(pid >  400) pid = 400;               // range limit pid
   if(pid < -400) pid = -400;
@@ -1220,9 +1221,10 @@ void updateOLED(float angle)
   //de skip arg processing, use tilt in degrees directly?
   rightOLED.clear();
   //de next line was:  rightOLED.drawString(64, 20, String(angle * 180 / PI));
-  rightOLED.drawString(0, 10, String("Ang: ")+String(tilt));
-  rightOLED.drawString(0, 30, String("Mtr: ")+String(motorInt));
-    rightOLED.display();
+  rightOLED.drawString(0, 0, String("Ang: ")+String(tilt));
+  rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));
+  rightOLED.drawString(0, 32, String("PID: ")+String(pid));
+  rightOLED.display();
   goOLED = millis() + tmrOLED; // Reset OLED update target time
 } //UpdateOLED()
 
@@ -1280,9 +1282,9 @@ void setupOLED()
   rightOLED.init();
   rightOLED.setFont(ArialMT_Plain_16);
   rightOLED.setTextAlignment(TEXT_ALIGN_LEFT);
-  rightOLED.drawString(64, 20, "My Demo"); //64,22
+  rightOLED.drawString(32, 20, "My Demo"); //64,22
   rightOLED.display();
-  AMDP_PRINTLN("<setupOLED> Initialization of OLEDupdateol complete");
+  AMDP_PRINTLN("<setupOLED> Initialization of OLED complete");
 } //setupOLED()
 
 /**
@@ -1593,6 +1595,7 @@ void checkBalanceState()
       { Balance.state = bs_sleep;    // abort balancing efforts, and go back to waiting for less than 30 degrees tilt
         throttle_Lsetting = 0;       // stop the motors
         throttle_Rsetting = 0;
+        motorInt = 0;
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_sleep");
 
       }                              //  sleep state will look after turning off motor enable
