@@ -10,9 +10,14 @@
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
   * 0.0.13  2020-06-02 DE: jump the Version number to sync up with master on Git
-  *                    -trim so source lines don't exceed 140 characters
-  *                    -rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
-  *                     standatrd of prefixing the prefix with "robot". Need to discuss merits of the COBOL approach.
+  *                    - trim so source lines don't exceed 140 characters
+  *                    - rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
+  *                      standard of prefixing the prefix with "robot". Need to discuss merits of the COBOL approach.
+  *                    - add Balance.state to track what part of balancing process we're in
+  *                    - add second balancing method, by angle, with control by Balance.method variable, and 2 part motor ISR's
+  *                       key new routine is balanceByAngle() called from loop()
+  *                    - add display of motor "speed" variable to OLED
+  *                    - add smoothing to motor speed changes
   * 0.0.8   2020-05-29 DE: update my bot's calibraton data and correct printout
   *                    add three methods to calculate tile angle:
   *                    1)non-DMP, using methods from 2 websites:
@@ -172,7 +177,12 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 //portMUX_TYPE dmpMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize variables between the DMP data ready ISR and loop()
 float tilt;             // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
                         // same value is stored in Balance struct
-int $test;   //can we use dollar sign in variables?                        
+
+int $test;        //can we use dollar sign in variables? -yes
+//de int %test;   // percent? -no
+//de int @test;   // at-sign? no
+//de int ~test;   // tilde? -no 
+int _test;        // underscore at beginning?  -yes                  
 
 // Define global WiFi network information
 const char *mySSID = "NOTHING";
@@ -236,7 +246,7 @@ static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU 50                 // Milliseconds to wait between reading data to IMU over I2C
+#define tmrIMU 100                 // Milliseconds to wait between reading data to IMU over I2C
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -258,7 +268,10 @@ static volatile messageControl metadataMsg; // Object that contains details for 
 //portMUX_TYPE messageMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize message variables between ISR and loop()
 typedef struct
 {
-  float tilt = 0;                            // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical      
+  float tilt = 0;                            // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
+  int method;                                // are we using catchup distance balancing method, or angle based PID (see defs below)
+  int state = 0;                             // state within balancing process. see state definitions below, as in bs_start
+  float activeAngle = 2;                     //de how close to vertical, in degrees, before you start balancing attempt, & bs_active      
   float angleRadians = 0;                    // Robot tilt angle in radians
   float angleDegrees = 0;                    // Robot tilt angle in degrees - a copy of tilt for now
   //de  need to understand following line, and convert it to reflect vertical = 0 degrees
@@ -271,6 +284,28 @@ typedef struct
   int steps;                                 // Number of steps that it will take to get to target angle
 } balanceControl;                            // Structure for handling robot balancing calculations
 volatile balanceControl Balance;             // Object for calculating robot balance
+
+//de values for Balance.state
+#define bs_sleep 0     // inactive. from lying on back until 30 degrees from vertical
+#define bs_awake 1     // within 30 degrees of initial vertical, but still not active
+#define bs_active 2    // has hit vertical, and is now trying to balance
+
+//de values for Balance.method
+#define bm_catchup 1   // method based on catchup distance that would pull wheels under the center of mass
+#define bm_angle 2     // method based on applying correction based in PID applied to angle difference from vertical
+#define bm_initialMethod bm_angle    // use this balancing method to start, initialized in setupIMU
+
+volatile int throttle_Lcounter, throttle_Rcounter;        // working counter of timer ticks in motor controller ISRs
+volatile int throttle_Llimit, throttle_Rlimit;            // limit that determines step length in timer ticks
+volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
+
+float pid_p_gain = 20;       //de multiplier for the P part of PID
+int motorInt;                // motor speed, i.e. interval between steps in timer ticks
+int bot_slow = 520;          //de  need to fit these into structures, but quick & dirty now
+int bot_fast = 500;
+float smoother = .5;          // smooth changes in speed by using new = old + smoother * (new - old)  
+int lastSpeed = 0;            // memory for above method using smoother
+
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
 
 // Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment.
@@ -979,21 +1014,42 @@ void stepMotor(int index, uint mod)
 //TODO Put balance logic in here
 void IRAM_ATTR rightMotorTimerISR()
 {
-  int motor = RIGHT_MOTOR;
-  noInterrupts();
-  int tmp = Balance.steps;
-  stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
-  interrupts();
-  // Determine motor direction
-  if (tmp > 0)
-  {
-    digitalWrite(gp_DRV1_DIR, LOW);
-  } //if
-  else
-  {
-    digitalWrite(gp_DRV1_DIR, HIGH);
-  } //else
-  stepMotor(motor, tmp);
+  if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
+  { 
+      int motor = RIGHT_MOTOR;
+      noInterrupts();
+      int tmp = Balance.steps;
+      stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
+      interrupts();
+      // Determine motor direction
+      if (tmp > 0)
+      {
+        digitalWrite(gp_DRV1_DIR, LOW);
+      } //if
+      else
+      {
+        digitalWrite(gp_DRV1_DIR, HIGH);
+      } //else
+      stepMotor(motor, tmp);                    //de  vague memory about problems if ISR's in IRAM call routines out of IRAM?
+  } // if(Balance.method == bm_catchup)
+
+  if(Balance.method == bm_angle)                // this is the ISR for the angle method of balancing
+  { throttle_Rcounter ++;                       // increment our once per interrupt tick counter
+    if(throttle_Rcounter > throttle_Rlimit)     // did that take us to the limit value?
+    { throttle_Rcounter = 0;                    // yes, reset the counter, which goes upwards
+      throttle_Rlimit = throttle_Rsetting;      // reset upper limit to what the background calculated in balanceByAngle()
+      if(throttle_Rlimit< 0)                    // negative throttle means backwards
+      { digitalWrite(gp_DRV1_DIR,LOW);          // write zero to direction bit on DRV8825 motor controller
+        throttle_Rlimit *= -1;                  // get back to a +ve number for counter comparisons
+      }
+      else digitalWrite(gp_DRV1_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
+    }
+    else if(throttle_Rcounter == 1) digitalWrite(gp_DRV1_STEP,HIGH);  // start the step pulse at end of first counted tick
+    else if(throttle_Rcounter == 2) digitalWrite(gp_DRV1_STEP,LOW);   // end the step pulse at end of second counted tick  
+  } // if(Balance.method == bm_angle)
+
+
+
 } //rightMotorTimerISR()
 
 /** 
@@ -1003,21 +1059,39 @@ void IRAM_ATTR rightMotorTimerISR()
 //TODO Put balance logic in here
 void IRAM_ATTR leftMotorTimerISR()
 {
-  int motor = LEFT_MOTOR;
-  noInterrupts();
-  int tmp = Balance.steps;
-  stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
-  interrupts();
-  // Determine motor direction
-  if (tmp > 0)
-  {
-    digitalWrite(gp_DRV2_DIR, LOW);
-  } //if
-  else
-  {
-    digitalWrite(gp_DRV2_DIR, HIGH);
-  } //else
-  stepMotor(motor, tmp); 
+  if(Balance.method == bm_catchup)                //de this is the ISR for the catchup method of balancing
+  { 
+    int motor = LEFT_MOTOR;
+    noInterrupts();
+    int tmp = Balance.steps;
+    stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    interrupts();
+    // Determine motor direction
+    if (tmp > 0)
+    {
+      digitalWrite(gp_DRV2_DIR, LOW);
+    } //if
+    else
+    {
+      digitalWrite(gp_DRV2_DIR, HIGH);
+    } //else
+    stepMotor(motor, tmp); 
+  } // if(Balance.method == bm_catchup)
+
+  if(Balance.method == bm_angle)                //de this is the ISR for the angle method of balancing
+  { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
+    if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
+    { throttle_Lcounter = 0;                    // yes, reset the counter, which goes upwards
+      throttle_Llimit = throttle_Lsetting;      // reset upper limit to what the background calculated in balanceByAngle()
+      if(throttle_Llimit< 0)                    // negative throttle means backwards
+      { digitalWrite(gp_DRV2_DIR,LOW);          // write zero to direction bit on DRV8825 motor controller
+        throttle_Llimit *= -1;                  // get back to a +ve number for counter comparisons
+      }
+      else digitalWrite(gp_DRV2_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
+    }
+    else if(throttle_Lcounter == 1) digitalWrite(gp_DRV2_STEP,HIGH);  // start the step pulse at end of first counted tick
+    else if(throttle_Lcounter == 2) digitalWrite(gp_DRV2_STEP,LOW);   // end the step pulse at end of second counted tick  
+  } // if(Balance.method == bm_angle)
 } //leftMotorTimerISR()
 
 /**
@@ -1057,6 +1131,35 @@ void calcBalanceParmeters(float angleRadians)
     } //else
   }   //if
 } // calcBalanceParmeters()
+
+/**
+ * @brief Adjust motor controls to minimize how far we are from vertical, using PID tuning 
+ * called from loop()
+=================================================================================================== */
+void balanceByAngle()
+{
+  //de (work in progress)
+  float angleErr = tilt - 0;              // this the difference between where we are, and where we want to be (anglewise)
+  float pid = pid_p_gain * angleErr;      // apply the multiplier for the P in PID
+                                          // ignore the I and D in PID, for now
+  if(pid >  400) pid = 400;               // range limit pid
+  if(pid < -400) pid = -400;
+  if(abs(pid) < 5) pid = 0;               // create a dead band to stop motors when robot is balanced
+
+  if(pid > 0) motorInt = int(    bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;  // motorInt is speed interval in timer ticks
+  if(pid < 0) motorInt = int( -1*bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;
+  if(pid == 0) motorInt = 0 ;
+
+  // experimental  motor speed change smoothing
+  int deltaSpd = smoother * (motorInt-lastSpeed);
+  motorInt = motorInt + deltaSpd;
+  lastSpeed = motorInt;
+  
+  noInterrupts();         // block any motor interrupts while we change control parameters
+  throttle_Lsetting = motorInt;
+  throttle_Rsetting = motorInt;
+  interrupts();
+} // balanceByAngle
 
 /**
  * @brief Send updated metadata about the running of the code.
@@ -1117,8 +1220,9 @@ void updateOLED(float angle)
   //de skip arg processing, use tilt in degrees directly?
   rightOLED.clear();
   //de next line was:  rightOLED.drawString(64, 20, String(angle * 180 / PI));
-  rightOLED.drawString(64, 20, String(tilt));
-  rightOLED.display();
+  rightOLED.drawString(0, 10, String("Ang: ")+String(tilt));
+  rightOLED.drawString(0, 30, String("Mtr: ")+String(motorInt));
+    rightOLED.display();
   goOLED = millis() + tmrOLED; // Reset OLED update target time
 } //UpdateOLED()
 
@@ -1174,11 +1278,11 @@ void setupOLED()
 {
   AMDP_PRINTLN("<setupOLED> Initialize OLED");
   rightOLED.init();
-  rightOLED.setFont(ArialMT_Plain_24);
-  rightOLED.setTextAlignment(TEXT_ALIGN_CENTER);
+  rightOLED.setFont(ArialMT_Plain_16);
+  rightOLED.setTextAlignment(TEXT_ALIGN_LEFT);
   rightOLED.drawString(64, 20, "My Demo"); //64,22
   rightOLED.display();
-  AMDP_PRINTLN("<setupOLED> Initialization of OLED complete");
+  AMDP_PRINTLN("<setupOLED> Initialization of OLEDupdateol complete");
 } //setupOLED()
 
 /**
@@ -1231,7 +1335,7 @@ void setupIMU()
     packetSize = mpu.dmpGetFIFOPacketSize();
     AMDP_PRINT("<setupIMU> packetSize = ");
     AMDP_PRINTLN(packetSize);
-    // Initial read of DMP FIFO
+    Balance.method = bm_initialMethod;      // are we balancing by catchup distance, or angle deviation?
   }    //if
   else // If initialization failed
   {
@@ -1442,29 +1546,60 @@ void setupDriverMotors()
 /**
  * @brief Enable or disable motor based on robot angle
 =================================================================================================== */
-void checkTiltToActivateMotors()
+void checkBalanceState()
 {
-//de  if (Balance.angleDegrees < 90 + Balance.maxAngleMotorActiveDegrees &&
-//de      Balance.angleDegrees > 90 - Balance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance
-  if( abs(tilt) < 30)  // if robot is within 30 degrees of vertical
+//de check to see if there's been a change in the balance state, and if so, handle the transition
+  switch (Balance.state)
   {
-    if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
+    case bs_sleep:
     {
-      AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
-      digitalWrite(gp_DRV1_ENA, LOW);
-      digitalWrite(gp_DRV2_ENA, LOW);
-    }  //if
-  }    //if
-  else // otherwise robot has such a big tilt that it should not be trying to balance
-  {
-    if (digitalRead(gp_DRV1_ENA) == LOW) // If motor is currently turned ON
-    {
-      AMDP_PRINTLN("<checkTiltToActivateMotors> Disable stepper motors");
-      digitalWrite(gp_DRV1_ENA, HIGH);
-      digitalWrite(gp_DRV2_ENA, HIGH);
-    } //if
-  }   //else
-} //checkTiltToActivateMotors()
+      //de  if (Balance.angleDegrees < 90 + Balance.maxAngleMotorActiveDegrees &&
+      //de      Balance.angleDegrees > 90 - Balance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance
+      if( abs(tilt) < 30)  // if robot is within 30 degrees of vertical
+      {
+        if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
+        {
+          AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+          digitalWrite(gp_DRV1_ENA, LOW);
+          digitalWrite(gp_DRV2_ENA, LOW);
+        }  //if
+        Balance.state = bs_awake;       //de we're now waiting to hit almost vertical before going active
+        AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
+      }    // if (abs(tilt)
+
+      else // otherwise robot has such a big tilt that it should not be trying to balance
+      {
+        if (digitalRead(gp_DRV1_ENA) == LOW) // If motor is currently turned ON
+        {
+          AMDP_PRINTLN("<checkTiltToActivateMotors> Disable stepper motors");
+          digitalWrite(gp_DRV1_ENA, HIGH);
+          digitalWrite(gp_DRV2_ENA, HIGH);
+        } //if
+        //de ... and stay in bs_sleep state
+      }   //else
+      break;
+    } // case bs_sleep
+
+    case bs_awake:
+    { if(abs(tilt) <= Balance.activeAngle)      // are we almost vertical?
+      { Balance.state = bs_active;              // yes, so start trying to balance
+        AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
+      }
+    break;
+
+    } // case bs_awake
+    case bs_active:
+    { if(abs(tilt) >= 30)            // have we gone more than 30 degrees from vertical?
+      { Balance.state = bs_sleep;    // abort balancing efforts, and go back to waiting for less than 30 degrees tilt
+        throttle_Lsetting = 0;       // stop the motors
+        throttle_Rsetting = 0;
+        AMDP_PRINTLN( "<checkBalanceState> entering state bs_sleep");
+
+      }                              //  sleep state will look after turning off motor enable
+    break;
+    } // case bs_active
+  } //switch(Balance.state)
+} //checkBalanceState()
 
 /**
  * @brief Set the robot's objective
@@ -1503,7 +1638,6 @@ void setup()
   Serial.begin(115200); // Open a serial connection at 115200bps
   while (!Serial) ;     // Wait for Serial port to be ready
   Serial.println(F("<setup> Start of setup"));
-  $test = 123; Serial.println($test);
   cfgByMAC();                            // Use the devices MAC address to make specific configuration settings
   setRobotObjective(STATE_STAND_GROUND); // Assign robot the goal to stand upright
   setupLED();                            // Set up the LED that the loop() flashes
@@ -1528,17 +1662,26 @@ void loop()
 {
   cntLoop++; // Increment loop() counter
   if (WifiLastEvent != -1)
-    processWifiEvent();             // if there's a pending Wifi event, handle it
+    processWifiEvent();                   // if there's a pending Wifi event, handle it
   if (millis() >= goIMU)
   {
-    boolean rCode = readIMU(); // Read the IMU. Balancing and data printing is handled in here as well
-    if (rCode)
+    boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
+    if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
-      //de suggest removing the arg in radians, and use stored tilt value in degrees
-      calcBalanceParmeters(ypr[2]); // Do balancing calculations
-      checkTiltToActivateMotors();  // Enable or disable motor based on robot angle
-    }                               //if
-  }                                 //if
+      checkBalanceState();                // handle balance state changes: sleep, awake, active
+      if(Balance.state ==bs_active)       // if we're in a state where we can try to balance
+      {                                   // then do so, depending on which method we're using
+        if(Balance.method == bm_catchup)
+        {
+          //de suggest removing the arg in radians, and use stored tilt value in degrees
+          calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
+        } // if(Balance.method)
+        if(Balance.method == bm_angle)
+        { balanceByAngle();               // Do balancing calculation based on angle displacement from vertical 
+        }
+      } // if(Balance.state...)
+    }                               // if rCode
+  }                                 // if millis() > goIMU
   if (millis() >= goOLED)
     updateOLED(ypr[2]); // Control OLED display
   if (millis() >= goLED)
