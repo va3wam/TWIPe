@@ -193,6 +193,8 @@ String myAccessPoint;              // WiFi Access Point that we managed to conne
 String myHostName;                 // Name by which we are known by the Access Point
 String myHostNameSuffix = "Twipe"; // Suffix to add to WiFi host name for this robot
 WiFiClient client;                 // Create an ESP32 WiFiClient class to connect to the MQTT server
+String tmpHostNameVar;             // Hold WiFi host name created in this function
+
 TimerHandle_t wifiReconnectTimer;  // Reference to FreeRTOS timer used for restarting wifi
 int wifiCurrConAttemptsCnt = 0;    // Number of Acess Point connection attempts made during current connection effort
 int WifiLastEvent = -1;            // last seen Wifi event, that needs to be handled in loop()
@@ -210,7 +212,7 @@ char const* wifiEv[]               // WiFi event number translations
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
 // Note sends balance telemetry data to <device name><telemetry/balance>
 // Note listens for commands on <device name><commands>
-#define MQTT_BROKER_IP "192.168.2.21"     // Need to make this a fixed IP address
+const char* MQTT_BROKER_IP = "not-assigned";   // Need to make this a fixed IP address
 #define MQTT_BROKER_PORT 1883             // Use 8883 for SSL
 #define MQTT_USERNAME "NULL"              // Not used at this time. To do: secure MQTT broker
 #define MQTT_KEY "NULL"                   // Not used at this time. To do: secure MQTT broker
@@ -497,7 +499,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
 {
   int event = WifiLastEvent; // retrieve last event that occurred
   WifiLastEvent = -1;        // and say that we've processed it
-  String tmpHostNameVar;     // Hold WiFi host name created in this function
+//  String tmpHostNameVar;     // Hold WiFi host name created in this function
   AMDP_PRINT("<processWiFiEvent> event:");
   AMDP_PRINTLN(event);
   switch (event)
@@ -524,7 +526,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     AMDP_PRINTLN(WiFi.localIP());
     myIPAddress = ipToString(WiFi.localIP());
     myAccessPoint = WiFi.SSID();
-    tmpHostNameVar = myHostNameSuffix + myMACaddress;
+//    tmpHostNameVar = myHostNameSuffix + myMACaddress;
     WiFi.setHostname((char *)tmpHostNameVar.c_str());
     myHostName = WiFi.getHostname();
     Serial.print("<processWiFiEvent> Network connection attempt #");
@@ -1368,6 +1370,7 @@ void setupIMU()
 =================================================================================================== */
 void cfgByMAC()
 {
+  tmpHostNameVar = myHostNameSuffix + myMACaddress;
   myMACaddress = formatMAC();
   if (myMACaddress == "BCDDC2F7D6D5") // This is Andrew's bot
   {
@@ -1386,10 +1389,11 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    MQTT_BROKER_IP = "192.168.2.21";
   }                                        //if
   else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
   {
-    AMDP_PRINTLN("<cfgByMAC> Setting up MAC BCDDC2F7D6D5 configuration - Doug");
+    AMDP_PRINTLN("<cfgByMAC> Setting up MAC B4E62D9EA8F9 configuration - Doug");
     robot.XGyroOffset = 60;
     robot.YGyroOffset = -10;
     robot.ZGyroOffset = -72;
@@ -1404,6 +1408,7 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    MQTT_BROKER_IP = "192.168.0.99";
   } //else if
   else
   {
@@ -1422,6 +1427,7 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    MQTT_BROKER_IP = "unrecognized MAC";
   } //else
   robot.wheelCircumference = robot.wheelDiameter * PI;
   robot.distancePerStep = robot.wheelCircumference / stepperMotor[RIGHT_MOTOR].stepsPerRev;
@@ -1557,7 +1563,7 @@ void checkBalanceState()
     {
       //de  if (Balance.angleDegrees < 90 + Balance.maxAngleMotorActiveDegrees &&
       //de      Balance.angleDegrees > 90 - Balance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance
-      if( abs(tilt) < 30)  // if robot is within 30 degrees of vertical
+      if( abs(tilt) < Balance.maxAngleMotorActiveDegrees)  // if robot is within 30 degrees of vertical
       {
         if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
         {
@@ -1587,11 +1593,15 @@ void checkBalanceState()
       { Balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
       }
+      if(abs(tilt < Balance.maxAngleMotorActiveDegrees))
+      { Balance.state = bs_sleep;
+        AMDP_PRINTLN("<checkBalanceState> falling back to bs_sleep state");
+      }
     break;
 
     } // case bs_awake
     case bs_active:
-    { if(abs(tilt) >= 30)            // have we gone more than 30 degrees from vertical?
+    { if(abs(tilt) >= Balance.maxAngleMotorActiveDegrees)            // have we gone more than 30 degrees from vertical?
       { Balance.state = bs_sleep;    // abort balancing efforts, and go back to waiting for less than 30 degrees tilt
         throttle_Lsetting = 0;       // stop the motors
         throttle_Rsetting = 0;
