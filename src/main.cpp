@@ -526,7 +526,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     AMDP_PRINTLN(WiFi.localIP());
     myIPAddress = ipToString(WiFi.localIP());
     myAccessPoint = WiFi.SSID();
-//    tmpHostNameVar = myHostNameSuffix + myMACaddress;
+    tmpHostNameVar = myHostNameSuffix + myMACaddress;
     WiFi.setHostname((char *)tmpHostNameVar.c_str());
     myHostName = WiFi.getHostname();
     Serial.print("<processWiFiEvent> Network connection attempt #");
@@ -1162,6 +1162,23 @@ void balanceByAngle()
   throttle_Lsetting = motorInt;
   throttle_Rsetting = motorInt;
   interrupts();
+
+  // Assemble balance telemetry string
+  //de would it be better to report angles in degrees or radians to MQTT?
+  String tmp = String(tilt) + "," + String(Balance.centreOfMassError);
+  tmp = tmp + "," + String(Balance.steps) + "," + String(stepperMotor[RIGHT_MOTOR].interval);
+  if (baltelMsg.active) // If configured to write balance telemetry data
+  {
+    if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
+    {
+      Serial.print("<calcBalanceParmeters> ");
+      Serial.println(tmp);
+    }    //if
+    else // Otherwise assume we are to send the data to the MQTT broker
+    {
+      publishMQTT("metadata", tmp);
+    } //else
+  }   //if
 } // balanceByAngle
 
 /**
