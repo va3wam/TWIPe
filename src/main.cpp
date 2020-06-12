@@ -18,6 +18,8 @@
   *                       key new routine is balanceByAngle() called from loop()
   *                    - add display of motor "speed" variable to OLED, and current PID value
   *                    - add smoothing to motor speed changes
+  *                    - add fallback from balance state awake to sleep, then fix it
+  *                    - correct topic used for MQTT balance data in balanceByAngle()
   * 0.0.8   2020-05-29 DE: update my bot's calibraton data and correct printout
   *                    add three methods to calculate tile angle:
   *                    1)non-DMP, using methods from 2 websites:
@@ -701,10 +703,10 @@ void onMqttUnsubscribe(uint16_t packetId)
  * | balTelOFF              | Causes balance telemetry data to stop being output |  
  * | balTelCON              | Causes balance telemetry to be published to the local console |  
  * | balTelMQTT             | Causes balance telemetry to be published to the MQTT broker topic {robot name}/metadata |  
- * | metaDataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
- * | metaDataOFF            | Causes metadata to stop being published to the MQTT broker |  
- * | metaDataCON            | Causes metadata to be published to the local console |
- * | metaDataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
+ * | metadataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
+ * | metadataOFF            | Causes metadata to stop being published to the MQTT broker |  
+ * | metadataCON            | Causes metadata to be published to the local console |
+ * | metadataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
 =================================================================================================== */
 void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
 {
@@ -1165,18 +1167,18 @@ void balanceByAngle()
 
   // Assemble balance telemetry string
   //de would it be better to report angles in degrees or radians to MQTT?
-  String tmp = String(tilt) + "," + String(Balance.centreOfMassError);
-  tmp = tmp + "," + String(Balance.steps) + "," + String(stepperMotor[RIGHT_MOTOR].interval);
+  String tmp = String(tilt) + "," + String(pid);
+  tmp = tmp + "," + String(motorInt) + "," + String(Balance.state);
   if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
     {
-      Serial.print("<calcBalanceParmeters> ");
+      Serial.print("<balanceByAngle> ");
       Serial.println(tmp);
     }    //if
     else // Otherwise assume we are to send the data to the MQTT broker
     {
-      publishMQTT("metadata", tmp);
+      publishMQTT("balance", tmp);
     } //else
   }   //if
 } // balanceByAngle
@@ -1281,6 +1283,7 @@ void setupMQTT()
   mqttClient.onMessage(onMqttMessage);
   mqttClient.onPublish(onMqttPublish);
   mqttClient.setServer(MQTT_BROKER_IP, MQTT_BROKER_PORT);
+
 } //setupMQTT()
 
 /**
@@ -1610,7 +1613,7 @@ void checkBalanceState()
       { Balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
       }
-      if(abs(tilt < Balance.maxAngleMotorActiveDegrees))
+      if(abs(tilt > Balance.maxAngleMotorActiveDegrees))
       { Balance.state = bs_sleep;
         AMDP_PRINTLN("<checkBalanceState> falling back to bs_sleep state");
       }
