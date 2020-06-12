@@ -2,13 +2,39 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.12
+ * @version 0.0.13
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+  * 0.0.13  2020-06-02 DE: jump the Version number to sync up with master on Git
+  *                    - trim so source lines don't exceed 140 characters
+  *                    - rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
+  *                      standard of prefixing the prefix with "robot". 
+  *                    - add Balance.state to track what part of balancing process we're in, and checkBalanceState() called from loop()
+  *                    - add second balancing method, by angle, with control by Balance.method variable, and 2 part motor ISR's
+  *                       key new routine is balanceByAngle() called from loop()
+  *                    - add display of motor "speed" variable to OLED, and current PID value
+  *                    - add smoothing to motor speed changes
+  *                    - add fallback from balance state awake to sleep, then fix it
+  *                    - correct topic used for MQTT balance data in balanceByAngle()
+  * 0.0.8   2020-05-29 DE: update my bot's calibraton data and correct printout
+  *                    add three methods to calculate tile angle:
+  *                    1)non-DMP, using methods from 2 websites:
+  *                      https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/examples/MP
+  *                      https://hester.mtholyoke.edu/idesign/SensorTilt.html
+  *                    2)DMP, using one of the YPR values it provides, with a gimbal lock risk
+  *                    3)DMP, using quaternions to rotate original "up" vector (0,0,1)
+  *                    -add a visible separator line of equal signs before each routine definition
+  *                    -add another debug print command: AMDP_PRINTF(x,y)
+   *                   -left in the mpu.Calibrate... calls, although they're absent in Rowberg's lates
+   *                   -require the MPU6050 library with the fix on line 2764, by renaming it to MPU60
+   *                     MPU6050-6Axis_MotionApps_V6_12 as well, because it references MPU6050.h
+   *                   -reformat #includes to clarify which libraries we created ourselves, and make l
+   *                   -remove all support for DMP interrupts, which latest Rowberg code doesn't need
+   *                   -select DMP's YPR[2] as best tilt angle to use, in variable tilt, and trim code 
  * 0.0.12  2020-06-01 AM: Corrected wheel diameter value. Moved min/max PWM data to new metadata structure. Removed all the 
  *                        portENTER_CRITICAL_ISR commands and associated portMUX_TYPE variabes as these are only used to protect 
  *                        FREERTOS threads which we do not use at the moment. We can use nointerrupt() and interrupt() instead if
@@ -41,35 +67,54 @@
 // TODO Fix bug where sometimes MQTT commands do not terminate and the command goes forever
 
 // Arduino libraries
-#include <Arduino.h>                        // Arduino Core for ESP32 from https://github.com/espressif/arduino-esp32. Comes with Platform.io
-#include <WiFi.h>                           // Required to connect to WiFi network. Comes with Platform.io
-#include <I2Cdev.h>                         // For MPU6050 - https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/I2Cdev/I2Cdev.h
-#include <MPU6050_6Axis_MotionApps_V6_12.h> // For  MPU6050 - https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/MPU6050_6Axis_MotionApps_V6_12.h
-#include <Wire.h>                           // Required for I2C communication. Comes with Platform.io
-#include <SSD1306.h>                        // For OLED - https://github.com/ThingPulse/esp8266-oled-ssd1306
-#include <huzzah32_pins.h>                  // Defines GPIO pins for Adafruit Huzzah32 dev board
-#include <i2c_metadata.h>                   // Defines all I2C related information incluing device addresses, bus pins and bus speeds
-#include <known_networks.h>                 // Defines Access points and passwords that the robot can scan for and connect to
-#include <AsyncMqttClient.h>                // https://github.com/marvinroger/async-mqtt-client
+#include <Arduino.h>                                // Arduino Core for ESP32 
+// from https://github.com/espressif/arduino-esp32. Comes with Platform.io
+#include <WiFi.h>                                   // Required to connect to WiFi network. 
+// Comes with Platform.io
+#include <I2Cdev.h>                                 // For MPU6050 
+// from https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/I2Cdev/I2Cdev.h
+#include <MPU6050_6Axis_MotionApps_V6_12-fix2764.h> // for MPU6050. edited to refer to our MPU6050-fix2764.h
+// from https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/MPU6050_6Axis_MotionApps_V6_12.h
+#include <Wire.h>                                   // Required for I2C communication. 
+// Comes with Platform.io
+#include <SSD1306.h>                                // For OLED 
+// from https://github.com/ThingPulse/esp8266-oled-ssd1306
+#include <MPU6050-fix2764.h>                        // for MPU6050
+// require the version that has fix for misplaced parenthesis at line 2764
+#include <huzzah32_pins.h>                          // Defines our usage of the GPIO pins for Adafruit Huzzah32 dev board
+// our own creation
+#include <i2c_metadata.h>                           // Defines all I2C related info including device addresses, bus pins and bus speeds
+// our own creation
+#include <known_networks.h>                         // Defines Access points and passwords that the robot can scan for and connect to
+// our own creation
+#include <AsyncMqttClient.h> // for Message Queuing Telemetry Support
+// from https://github.com/marvinroger/async-mqtt-client
 
-// FreeRTOS libraries
-#include "freertos/FreeRTOS.h"     // Required for threads that control wifi and mqtt connections
-#include "freertos/timers.h"       // Required for xTimerCreate function used for controlling wifi and mqtt connections
-#include <freertos/event_groups.h> // Required to use the FreeRTOS function xEventGroupSetBits. Used for motor driver control
-#include <freertos/queue.h>        // Required to use FreeRTOS the function uxQueueMessagesWaiting. Used for motor driver control
+// FreeRTOS libraries  
+#include "freertos/FreeRTOS.h"      // Required for threads that control wifi and mqtt connections
+// Comes with Platform.io ?
+#include "freertos/timers.h"        // Required for xTimerCreate function used for controlling wifi and mqtt connections
+// Comes with Platform.io ?
+#include <freertos/event_groups.h>  // Required to use the FreeRTOS function xEventGroupSetBits. Used for motor driver control
+// Comes with Platform.io ?
+#include <freertos/queue.h>         // Required to use FreeRTOS the function uxQueueMessagesWaiting. Used for motor driver control
+// Comes with Platform.io ?
 
-// Precompiler directives for debug output
-#define DEBUG true      // Turn debug tracing on/off
-#define DMP_TRACE false // Set to TRUE or FALSE to toggle DMP memory read/write activity
+// Precompiler directives for debug output 
+#define DEBUG true                  // Turn debug tracing on/off
+#define DMP_TRACE false             // Set to TRUE or FALSE to toggle DMP memory read/write activity
 
-// Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable
+// Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
 #if DEBUG == true
-#define AMDP_PRINT(x) Serial.print(x)
-#define AMDP_PRINTLN(x) Serial.println(x)
+    #define AMDP_PRINT(x) Serial.print(x)
+    #define AMDP_PRINTLN(x) Serial.println(x)
+    #define AMDP_PRINTF(x, y) Serial.printf(x, y)   // allow more concise debug output
 #else // Map macros to "do nothing" commands so that when is not TRUE these commands do nothing
-#define AMDP_PRINT(x)
-#define AMDP_PRINTLN(x)
+    #define AMDP_PRINT(x)
+    #define AMDP_PRINTLN(x)
+    #define AMDP_PRINTF(x, y)
 #endif
+
 
 // Define which core the Arduino environment is running on
 #if CONFIG_FREERTOS_UNICORE    // If this is an SOC with only 1 core
@@ -78,11 +123,11 @@
 #define ARDUINO_RUNNING_CORE 1 // Arduino is running on the second core
 #endif
 
-// Define robot specific global parameters
+
 typedef struct
 {
   float heightCOM = 0;                 // Height from ground to Center Of  Mass of robot in inches
-  float wheelDiameter = 3.937008;      // Diameter of drive wheels in inches. https://www.robotshop.com/en/100mm-diameter-wheel-5mm-hub.html
+  float wheelDiameter = 3.937008;      // Diameter of wheels in inches. https://www.robotshop.com/en/100mm-diameter-wheel-5mm-hub.html
   float wheelCircumference;            // Diameter x pi
   float distancePerStep = 0;           // Distance travelled per step of motor in inches
   int16_t XGyroOffset;                 // Gyroscope x axis (Roll)
@@ -105,7 +150,8 @@ typedef struct
   int activity = STATE_STAND_GROUND;      // The current objective that the robot is pursuing
   int parameter = STATE_PARAMETER_UNUSED; // A parameter used by some modes such as turn left and right
   float targetDistance = 0;               // Target distance robot wants to maintain
-  float targetAngleDegrees = 90;          // Target angle the robot wants to maintain to achieve the target distance. 90 = stand still
+  //de following line assumes vertical is zero degrees
+  float targetAngleDegrees = 0;          // Target angle the robot wants to maintain to achieve the target distance. 0 = stay vertical
 } state;                                  // Structure for stepper motors that drive the robot
 static volatile state robotState;         // Object of states the robot is in pursuing vaious goals
 
@@ -116,12 +162,10 @@ SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
 bool blinkState = false;
 
 // Define MPU6050 constants, classes and global variables
-// Note that we are using Yaw/Pitch/Roll which suggers from gimble lock http://en.wikipedia.org/wiki/Gimbal_lock
+// Note that we are using Yaw/Pitch/Roll which might suffer from gimble lock http://en.wikipedia.org/wiki/Gimbal_lock
 MPU6050 mpu;            // GY521 default I2C address
-uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
 uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
-uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 Quaternion q;           // [w, x, y, z]         quaternion container
 VectorInt16 aa;         // [x, y, z]            accel sensor measurements
@@ -129,10 +173,18 @@ VectorInt16 gy;         // [x, y, z]            gyro sensor measurements
 VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
 VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
 VectorFloat gravity;    // [x, y, z]            gravity vector
-float euler[3];         // [psi, theta, phi]    Euler angle container
+//de we don't use the following vector
+//de float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 //portMUX_TYPE dmpMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize variables between the DMP data ready ISR and loop()
-volatile bool mpuInterrupt = false; // indicates whether MPU interrupt pin has gone high
+float tilt;             // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
+                        // same value is stored in Balance struct
+
+int $test;        //can we use dollar sign in variables? -yes
+//de int %test;   // percent? -no
+//de int @test;   // at-sign? no
+//de int ~test;   // tilde? -no 
+int _test;        // underscore at beginning?  -yes                  
 
 // Define global WiFi network information
 const char *mySSID = "NOTHING";
@@ -143,16 +195,26 @@ String myAccessPoint;              // WiFi Access Point that we managed to conne
 String myHostName;                 // Name by which we are known by the Access Point
 String myHostNameSuffix = "Twipe"; // Suffix to add to WiFi host name for this robot
 WiFiClient client;                 // Create an ESP32 WiFiClient class to connect to the MQTT server
+String tmpHostNameVar;             // Hold WiFi host name created in this function
+
 TimerHandle_t wifiReconnectTimer;  // Reference to FreeRTOS timer used for restarting wifi
 int wifiCurrConAttemptsCnt = 0;    // Number of Acess Point connection attempts made during current connection effort
 int WifiLastEvent = -1;            // last seen Wifi event, that needs to be handled in loop()
                                    // 0 = Wifi ready, 4 = connected, 5 = disconnected, 7 = got IP address
 
+char const* wifiSt[]               // WiFi status code translations
+{ "WL_IDLE_STATUS","WL_IDLE_STATUS","WL_SCAN_COMPLETED","WL_CONNECTED","WL_CONNECT_FAILED","WL_CONNECTION_LOST","WL_DISCONNECTED"
+};
+
+char const* wifiEv[]               // WiFi event number translations
+{"WiFi ready","AP scan done","station start","station stop","connected to AP","disconnected from AP","auth mode changed","got IP","lost IP"
+};
+
 // Define MQTT constants, classes and global variables.
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
 // Note sends balance telemetry data to <device name><telemetry/balance>
 // Note listens for commands on <device name><commands>
-#define MQTT_BROKER_IP "192.168.2.21"     // Need to make this a fixed IP address
+const char* MQTT_BROKER_IP = "not-assigned";   // Need to make this a fixed IP address
 #define MQTT_BROKER_PORT 1883             // Use 8883 for SSL
 #define MQTT_USERNAME "NULL"              // Not used at this time. To do: secure MQTT broker
 #define MQTT_KEY "NULL"                   // Not used at this time. To do: secure MQTT broker
@@ -172,25 +234,25 @@ String metTopicMQTT = "NOTHING"; // Full path to outgoing metadata topic to MQTT
 #define LEFT_MOTOR 1                // Index value of right motor array
 hw_timer_t *rightMotorTimer = NULL; // Pointer to right motor ISR
 hw_timer_t *leftMotorTimer = NULL;  // Pointer to left motor ISR
-//portMUX_TYPE leftMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left motor variable access between ISR and main program thread
-//portMUX_TYPE rightMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right motor variable access between ISR and main program thread
-//portMUX_TYPE leftDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left DVR8825 fault error variable access between ISR and main program thread
-//portMUX_TYPE rightDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right DVR8825 fault error variable access between ISR and main program thread
+//portMUX_TYPE leftMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left motor variable access for ISR & main thread
+//portMUX_TYPE rightMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right motor variable access for ISR & main thread
+//portMUX_TYPE leftDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left DVR8825 fault err var. access for ISR & main thread
+//portMUX_TYPE rightDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right DVR8825 fault err var. access for ISR & main thread
 typedef struct
 {
   long interruptCounter;                      // Counter for step signals to the DRV8825 motor driver
   int minSpeed = 300;                         // Minimum speed the motor should run at to be effective
   int speedRange = 300;                       // Range of speed the motor is effective at. Add to minSpeed to get max speed
-  int interval = 600;                         // Delay time (microseconds) used for motor PWM. The smaller this number is the faster the motor goes
+  int interval = 600;                         // Delay time (microseconds) used for motor PWM. smaller number -> higher motor speed
   int stepsPerRev = 200;                      // How many steps it takes to do a full 360 degree rotation
 } motorControl;                               // Structure for stepper motors that drive the robot
 static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU 200                // Milliseconds to wait between reading data to IMU over I2C
+#define tmrIMU 100                 // Milliseconds to wait between reading data to IMU over I2C
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
-#define tmrMETADATA 2000          // Milliseconds to wait between sending data to serial port
+#define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
 uint32_t cntLoop = 0;             // Track how many times loop() has iterated
 int goIMU = 0;                    // Target time for next read of IMU data
@@ -210,16 +272,45 @@ static volatile messageControl metadataMsg; // Object that contains details for 
 //portMUX_TYPE messageMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize message variables between ISR and loop()
 typedef struct
 {
+  float tilt = 0;                            // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
+  int method;                                // are we using catchup distance balancing method, or angle based PID (see defs below)
+  int state = 0;                             // state within balancing process. see state definitions below, as in bs_start
+  float activeAngle = 2;                     //de how close to vertical, in degrees, before you start balancing attempt, & bs_active      
   float angleRadians = 0;                    // Robot tilt angle in radians
-  float angleDegrees = 0;                    // Robot tilt angle in degrees
+  float angleDegrees = 0;                    // Robot tilt angle in degrees - a copy of tilt for now
+  //de  need to understand following line, and convert it to reflect vertical = 0 degrees
   float angleTargetRadians = 1.5707961;      // Target angle robot wants to be at in radians. 1.5707961 is standing upright
-  float angleTargetDegrees = 90;             // Target angle robot wants to be at in degrees. 90 standing upright
+  //de following line converted to vertical = 0 mode
+  float angleTargetDegrees = 0;             // Target angle robot wants to be at in degrees. 0 is standing upright
   float maxAngleMotorActiveDegrees = 30;     // Maximum angle the robot can lean at before motors shut off
   float centreOfMassError = robot.heightCOM; // Distance in inches robot's Centre Of Mass (COM) is away from target
   float distancePercentage;                  // Percentage of COM height away from target
   int steps;                                 // Number of steps that it will take to get to target angle
 } balanceControl;                            // Structure for handling robot balancing calculations
-volatile balanceControl robotBalance;        // Object for calculating robot balance
+volatile balanceControl Balance;             // Object for calculating robot balance
+
+//de values for Balance.state
+#define bs_sleep 0     // inactive. from lying on back until 30 degrees from vertical
+#define bs_awake 1     // within 30 degrees of initial vertical, but still not active
+#define bs_active 2    // has hit vertical, and is now trying to balance
+
+//de values for Balance.method
+#define bm_catchup 1   // method based on catchup distance that would pull wheels under the center of mass
+#define bm_angle 2     // method based on applying correction based in PID applied to angle difference from vertical
+#define bm_initialMethod bm_angle    // use this balancing method to start, initialized in setupIMU
+
+volatile int throttle_Lcounter, throttle_Rcounter;        // working counter of timer ticks in motor controller ISRs
+volatile int throttle_Llimit, throttle_Rlimit;            // limit that determines step length in timer ticks
+volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
+float pid;                                                  // global so updateOLED() can find it
+
+float pid_p_gain = 50;       //de multiplier for the P part of PID
+int motorInt;                // motor speed, i.e. interval between steps in timer ticks
+int bot_slow =600;          //de  need to fit these into structures, but quick & dirty now
+int bot_fast = 300;
+float smoother = .5;          // smooth changes in speed by using new = old + smoother * (new - old)  
+int lastSpeed = 0;            // memory for above method using smoother
+
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
 
 // Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment.
@@ -250,18 +341,9 @@ boolean LCD_detected = false;
 boolean MPU6050_detected = false;
 boolean wifi_connected = false;
 
-/** 
- * @brief Interrupt Service Routine (ISR) that runs when the DMP firmware on the MPU6050 raises its interrupt pin indicating that it
- * has data in its FIFO buffer ready to be read over I2C 
- * @note This function is not placed in IRAM 
- */
-// TODO Understand the use or IRAM
-void dmpDataReady()
-{
-  //  portENTER_CRITICAL(&dmpMUX); // Prevent loop() from updating variable while we are changing it
-  mpuInterrupt = true; // Flag the fact that there is data ready to be read
-  //  portEXIT_CRITICAL(&dmpMUX); // Allow loop() access to variable again
-} //dmpDataReady()
+// ISR dmpDataReady(), once used for IMU DMP interrupts is now unneeded and has been removed
+
+// TODO understand the use of IRAM
 
 /** 
  * @brief Strips the colons off the MAC address of this device
@@ -284,7 +366,7 @@ String formatMAC()
 
 /**
  * @brief ISR for left DRV8825 fault condition
- */
+===================================================================================================*/
 void IRAM_ATTR leftDRV8825fault()
 {
   //  portENTER_CRITICAL_ISR(&leftDRVMux);
@@ -296,7 +378,7 @@ void IRAM_ATTR leftDRV8825fault()
 /**
  * @brief ISR for right DRV8825 fault condition
  * 
- */
+=================================================================================================== */
 void IRAM_ATTR rightDRV8825fault()
 {
   //  portENTER_CRITICAL_ISR(&rightDRVMux);
@@ -322,7 +404,7 @@ String ipToString(IPAddress ip)
 
 /**
  * @brief Connect to WiFi Access Point 
- */
+=================================================================================================== */
 void connectToWifi()
 {
   metadata.wifiConAttemptsCnt++; // Increment the number of attempts made to connect to the Access Point
@@ -336,7 +418,7 @@ void connectToWifi()
  * @brief Connect to MQTT broker
  * @note MQTT Spec: https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718063
  * @note Reference for MQTT comments in this code: https://www.hivemq.com/mqtt-essentials/
- */
+=================================================================================================== */
 void connectToMqtt()
 {
   AMDP_PRINTLN("<connectToMqtt> Connecting to MQTT...");
@@ -395,17 +477,18 @@ void connectToMqtt()
  * > 4 | WL_CONNECT_FAILED	4
  * > 5 | WL_CONNECTION_LOST	5
  * > 6 | WL_DISCONNECTED	6
- */
+=================================================================================================== */
 void WiFiEvent(WiFiEvent_t event)
 {
   AMDP_PRINT("<WifiEvent> saw event number: ");
-  AMDP_PRINTLN(event);
+  AMDP_PRINT(event);
+  AMDP_PRINTLN(String(" = ") + wifiEv[event]);
   if (WifiLastEvent != -1)
   {
     AMDP_PRINT("<WiFiEvent> ********* Overwrote an unprocessed event *********  ");
-    AMDP_PRINT(WifiLastEvent);
+    AMDP_PRINT(wifiEv[WifiLastEvent]);
     AMDP_PRINT(" was replaced by: ");
-    AMDP_PRINTLN(event);
+    AMDP_PRINTLN(wifiEv[event]);
   }
   WifiLastEvent = event; // remember what event it was, and signal loop() to process it
 } //WiFiEvent()
@@ -413,12 +496,12 @@ void WiFiEvent(WiFiEvent_t event)
 /**
  * @brief Actually handles WiFi events using the last known wifi event that was set in WiFiEvent()
  * @note Called from loop()
- */
+=================================================================================================== */
 void processWifiEvent() // called fron loop() to handle event ID stored in WifiLastEvent
 {
   int event = WifiLastEvent; // retrieve last event that occurred
   WifiLastEvent = -1;        // and say that we've processed it
-  String tmpHostNameVar;     // Hold WiFi host name created in this function
+//  String tmpHostNameVar;     // Hold WiFi host name created in this function
   AMDP_PRINT("<processWiFiEvent> event:");
   AMDP_PRINTLN(event);
   switch (event)
@@ -432,7 +515,8 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
   {
     AMDP_PRINTLN("<processWiFiEvent> Lost WiFi connection");
     //      int blockTime  = 10; // https://www.freertos.org/FreeRTOS-timers-xTimerStart.html
-    //      xTimerStop(mqttReconnectTimer, blockTime); // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi. Disconnect triggers new connect atempt
+    //      xTimerStop(mqttReconnectTimer, blockTime);  // ensure we don't reconnect to MQTT while reconnecting to Wi-Fi.
+                                                        // Disconnect triggers new connect atempt
     //      xTimerStart(wifiReconnectTimer, blockTime); // Activate wifi timer (which only runs 1 time)
     wifi_connected = false;
     metadata.wifiDropCnt++; // Increment the number of network drops that have occured
@@ -447,7 +531,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     tmpHostNameVar = myHostNameSuffix + myMACaddress;
     WiFi.setHostname((char *)tmpHostNameVar.c_str());
     myHostName = WiFi.getHostname();
-    Serial.print("<processWiFiEvent> Network connecion attempt #");
+    Serial.print("<processWiFiEvent> Network connection attempt #");
     Serial.print(metadata.wifiConAttemptsCnt);
     Serial.print(" SUCCESSFUL after this many tries: ");
     Serial.println(wifiCurrConAttemptsCnt);
@@ -503,14 +587,14 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
  * whether the connection attempt was successful. Here are the return codes at a glance:
  *
  * | Return Code | Return Code Response |  
- * |:-----------:|:------------------------------------------------------------------------------------------------------------------|
+ * |:-----------:|:------------------------------------------------------|
  * |  0  | Connection accepted |
  * |  1  | Connection refused, unacceptable protocol version |
  * |  2  | Connection refused, identifier rejected |
  * |  3  | Connection refused, server unavailable |
  * |  4  | Connection refused, bad user name or password |
  * |  5  | Connection refused, not authorized |
- */
+=================================================================================================== */
 void onMqttConnect(bool sessionPresent)
 {
   AMDP_PRINTLN("<onMqttConnect> Connected to MQTT");
@@ -526,7 +610,7 @@ void onMqttConnect(bool sessionPresent)
 /**
  * @brief Handle disconnecting from an MQTT broker
  * @param reason Reason for disconnect
- */
+=================================================================================================== */
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 {
   AMDP_PRINTLN("<onMqttDisconnect> Disconnected from MQTT");
@@ -557,12 +641,12 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
  *
  * # Table of SUBACK return codes
  * | Return Code | Return Code Response |  
- * |:-----------:|:------------------------------------------------------------------------------------------------------------------|
+ * |:-----------:|:----------------------------------|
  * |  0  |  Success - Maximum QoS 0 |
  * |  1  |  Success - Maximum QoS 1 |
  * |  2  |  Success - Maximum QoS 2 |
  * | 128 |  Failure |
- */
+=================================================================================================== */
 void onMqttSubscribe(uint16_t packetId, uint8_t qos)
 {
   AMDP_PRINTLN("<onMqttSubscribe> Subscribe acknowledged by broker.");
@@ -579,7 +663,7 @@ void onMqttSubscribe(uint16_t packetId, uint8_t qos)
  * To confirm the unsubscribe, the broker sends an UNSUBACK acknowledgement message to the client. This message contains only the 
  * packet identifier of the original UNSUBSCRIBE message (to clearly identify the message). After receiving the UNSUBACK from the 
  * broker, the client can assume that the subscriptions in the UNSUBSCRIBE message are deleted.
- */
+=================================================================================================== */
 void onMqttUnsubscribe(uint16_t packetId)
 {
   AMDP_PRINTLN("Unsubscribe acknowledged.");
@@ -614,16 +698,16 @@ void onMqttUnsubscribe(uint16_t packetId)
  * 
  * ## Table of Known Commands
  * | Command                | Description                                                                                            |
- * |:-----------------------|:-------------------------------------------------------------------------------------------------------|
+ * |:-----------------------|:-----------------------------------------------------------------------------------------------|
  * | balTelON               | Causes balance telemetry data to be output |  
  * | balTelOFF              | Causes balance telemetry data to stop being output |  
  * | balTelCON              | Causes balance telemetry to be published to the local console |  
  * | balTelMQTT             | Causes balance telemetry to be published to the MQTT broker topic {robot name}/metadata |  
- * | metaDataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
- * | metaDataOFF            | Causes metadata to stop being published to the MQTT broker |  
- * | metaDataCON            | Causes metadata to be published to the local console |
- * | metaDataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
- */
+ * | metadataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
+ * | metadataOFF            | Causes metadata to stop being published to the MQTT broker |  
+ * | metadataCON            | Causes metadata to be published to the local console |
+ * | metadataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
+=================================================================================================== */
 void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
 {
   AMDP_PRINT("<onMqttMessage> Publish received.");
@@ -696,7 +780,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 /**
  * @brief Handle the reciept of a PUBACK message message from MQTT broker
  * @param packetId Unique identifier of the message.
- */
+=================================================================================================== */
 void onMqttPublish(uint16_t packetId)
 {
   AMDP_PRINTLN("Publish acknowledged.");
@@ -706,7 +790,7 @@ void onMqttPublish(uint16_t packetId)
 
 /**
  * @brief Manage multiple attempts to connect to the WiFi network  
- */
+=================================================================================================== */
 void connectToNetwork()
 {
   int maxConnectionAttempts = 20; // Maximum number of Access Point connection attemts
@@ -723,7 +807,7 @@ void connectToNetwork()
     AMDP_PRINT("<connectToNetwork> Re-attempting connection to Access Point. Connect attempt count down = ");
     AMDP_PRINTLN(maxConnectionAttempts);
     AMDP_PRINT("<connectToNetwork>  current Wifi.status() is: ");
-    AMDP_PRINTLN(WiFi.status());
+    AMDP_PRINTLN(wifiSt[WiFi.status()]);
     int WFs = WiFi.status(); // keep it stable during following tests
     if (WFs == 1 || WFs == 4 || WFs == 5 || WFs == 6 || WFs == 0)
     {
@@ -771,7 +855,7 @@ String translateEncryptionType(wifi_auth_mode_t encryptionType)
 /**
  * @brief This function scans the WiFi spectrum looking for Access Points (AP). It selects the AP with the 
  * strongest signal which is included in the known network list.
- */
+=================================================================================================== */
 void scanNetworks()
 {
   int numberOfNetworks = WiFi.scanNetworks(); // Used to track how many APs are detected by the scan
@@ -829,7 +913,7 @@ void scanNetworks()
  * @note Code taken from Peter H Anderson example
  * @arg int8_t v = number to dispay
  * @arg int8_t num_places = number of bits to display (normally a multile of 8)
- */
+=================================================================================================== */
 void printBinary(byte v, int8_t num_places)
 {
   int8_t mask = 0, n;
@@ -870,7 +954,7 @@ void printBinary(byte v, int8_t num_places)
  * |:-----------------------|:---------------------------------|:--------------------------------------------------------------------|
  * | Balance telemetry      | {robot name}/telemetry/balance   | Angle of IMU orientation in degrees                                 |
  * | Robot Metadata         | {robot name}/metadata            | See metadata table for a full list of the data points being tracked |
- */
+=================================================================================================== */
 void publishMQTT(String topic, String msg)
 {
   char tmp[NUMBER_OF_MILLI_DIGITS];
@@ -900,7 +984,7 @@ void publishMQTT(String topic, String msg)
  * @note ISR for each motor calls this routine with the motor number index.  
  * @param index Which motor the interrupt is for. 0 = right motor, 1 = left motor
  * @param mod Odometer modifier. Handle updating the trip odometer for both polarities (directions)
- */
+=================================================================================================== */
 void stepMotor(int index, uint mod)
 {
   uint8_t gpioPin[2]; // Create 2 element array to hold values of the left and right motor pins
@@ -931,69 +1015,114 @@ void stepMotor(int index, uint mod)
 /** 
  * @brief ISR for right stepper motor that drives the robot
  * 
- */
+=================================================================================================== */
 //TODO Put balance logic in here
 void IRAM_ATTR rightMotorTimerISR()
 {
-  int motor = RIGHT_MOTOR;
-  noInterrupts();
-  int tmp = robotBalance.steps;
-  stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
-  interrupts();
-  // Determine motor direction
-  if (tmp > 0)
-  {
-    digitalWrite(gp_DRV1_DIR, LOW);
-  } //if
-  else
-  {
-    digitalWrite(gp_DRV1_DIR, HIGH);
-  } //else
-  stepMotor(motor, tmp);
+  if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
+  { 
+      int motor = RIGHT_MOTOR;
+      noInterrupts();
+      int tmp = Balance.steps;
+      stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
+      interrupts();
+      // Determine motor direction
+      if (tmp > 0)
+      {
+        digitalWrite(gp_DRV1_DIR, LOW);
+      } //if
+      else
+      {
+        digitalWrite(gp_DRV1_DIR, HIGH);
+      } //else
+      stepMotor(motor, tmp);                    //de  vague memory about problems if ISR's in IRAM call routines out of IRAM?
+  } // if(Balance.method == bm_catchup)
+
+  if(Balance.method == bm_angle)                // this is the ISR for the angle method of balancing
+  { throttle_Rcounter ++;                       // increment our once per interrupt tick counter
+    if(throttle_Rcounter > throttle_Rlimit)     // did that take us to the limit value?
+    { throttle_Rcounter = 0;                    // yes, reset the counter, which goes upwards
+      throttle_Rlimit = throttle_Rsetting;      // reset upper limit to what the background calculated in balanceByAngle()
+      if(throttle_Rlimit< 0)                    // negative throttle means backwards
+      { digitalWrite(gp_DRV1_DIR,LOW);          // write zero to direction bit on DRV8825 motor controller
+        throttle_Rlimit *= -1;                  // get back to a +ve number for counter comparisons
+      }
+      else digitalWrite(gp_DRV1_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
+    }
+    else if(throttle_Rcounter == 1) digitalWrite(gp_DRV1_STEP,HIGH);  // start the step pulse at end of first counted tick
+    else if(throttle_Rcounter == 2) digitalWrite(gp_DRV1_STEP,LOW);   // end the step pulse at end of second counted tick  
+  } // if(Balance.method == bm_angle)
+
+
+
 } //rightMotorTimerISR()
 
 /** 
  * @brief ISR for left stepper m otor that drives the robot
  * 
- */
+=================================================================================================== */
 //TODO Put balance logic in here
 void IRAM_ATTR leftMotorTimerISR()
 {
-  int motor = LEFT_MOTOR;
-  noInterrupts();
-  int tmp = robotBalance.steps;
-  stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
-  interrupts();
-  // Determine motor direction
-  if (tmp > 0)
-  {
-    digitalWrite(gp_DRV2_DIR, LOW);
-  } //if
-  else
-  {
-    digitalWrite(gp_DRV2_DIR, HIGH);
-  } //else
-  stepMotor(motor, tmp); 
+  if(Balance.method == bm_catchup)                //de this is the ISR for the catchup method of balancing
+  { 
+    int motor = LEFT_MOTOR;
+    noInterrupts();
+    int tmp = Balance.steps;
+    stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    interrupts();
+    // Determine motor direction
+    if (tmp > 0)
+    {
+      digitalWrite(gp_DRV2_DIR, LOW);
+    } //if
+    else
+    {
+      digitalWrite(gp_DRV2_DIR, HIGH);
+    } //else
+    stepMotor(motor, tmp); 
+  } // if(Balance.method == bm_catchup)
+
+  if(Balance.method == bm_angle)                //de this is the ISR for the angle method of balancing
+  { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
+    if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
+    { throttle_Lcounter = 0;                    // yes, reset the counter, which goes upwards
+      throttle_Llimit = throttle_Lsetting;      // reset upper limit to what the background calculated in balanceByAngle()
+      if(throttle_Llimit< 0)                    // negative throttle means backwards
+      { digitalWrite(gp_DRV2_DIR,LOW);          // write zero to direction bit on DRV8825 motor controller
+        throttle_Llimit *= -1;                  // get back to a +ve number for counter comparisons
+      }
+      else digitalWrite(gp_DRV2_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
+    }
+    else if(throttle_Lcounter == 1) digitalWrite(gp_DRV2_STEP,HIGH);  // start the step pulse at end of first counted tick
+    else if(throttle_Lcounter == 2) digitalWrite(gp_DRV2_STEP,LOW);   // end the step pulse at end of second counted tick  
+  } // if(Balance.method == bm_angle)
 } //leftMotorTimerISR()
 
 /**
  * @brief Calculate what needs to be done to get the robot's centre of mass (COM) over its drive wheels 
  * @param angleRadians Angle of robot lean in radians. 
- * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, 
+ * @note We are working with Yaw/Pitch/Roll data (and only using roll). Other options include euler, 
  * quaternion, raw acceleration, raw gyro, linear acceleration and gravity. 
  * See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
- */
+=================================================================================================== */
 void calcBalanceParmeters(float angleRadians)
 {
+//de suggest removing function argument, and using stored tilt value
+//de  disabling interrupts isn't effective because angle updates are done in background, in readIMU  
   noInterrupts();      // Prevent other code from updating balance variables while we are changing them
-  mpuInterrupt = true; // Flag the fact that there is data ready to be read
-  robotBalance.angleRadians = angleRadians;
-  robotBalance.angleDegrees = robotBalance.angleRadians * 180 / PI;                                      // Convert radians to degrees
-  robotBalance.centreOfMassError = robot.heightCOM - (robot.heightCOM * sin(robotBalance.angleRadians)); // Calculate distance COM is away from 90 degrees
-  robotBalance.steps = robotBalance.centreOfMassError / robot.distancePerStep;                           // Calculate how many steps that it will take to cover that distance
-  interrupts();                                                                                          // Allow other code to update balance variables again
+  Balance.angleRadians = angleRadians;
+  //de following line is already done in readIMU, with out of range protection
+  Balance.angleDegrees = Balance.angleRadians * 180 / PI;                        // Convert radians to degrees
+  //de  does the math for the following assume vertical is 0 degrees, or 90 degrees?
+  Balance.centreOfMassError = robot.heightCOM - (robot.heightCOM * sin(Balance.angleRadians)); // Calc distance COM is from 90 degrees
+  //de  Balance.COMError = robot.heightCOM * sin(tilt * DEG_TO_RAD);             // the catch-up distance
+  Balance.steps = Balance.centreOfMassError / robot.distancePerStep;             // Calc # of steps needed to cover that distance
+  interrupts();                                                                  // Allow other code to update balance variables again
   // Assemble balance telemetry string
-  String tmp = String(angleRadians) + "," + String(robotBalance.centreOfMassError) + "," + String(robotBalance.steps) + "," + String(stepperMotor[RIGHT_MOTOR].interval);
+  //de would it be better to report angles in degrees or radians to MQTT?
+  String tmp = String(angleRadians) + "," + String(Balance.centreOfMassError);
+  tmp = tmp + "," + String(Balance.steps) + "," + String(stepperMotor[RIGHT_MOTOR].interval);
   if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
@@ -1007,6 +1136,52 @@ void calcBalanceParmeters(float angleRadians)
     } //else
   }   //if
 } // calcBalanceParmeters()
+
+/**
+ * @brief Adjust motor controls to minimize how far we are from vertical, using PID tuning 
+ * called from loop()
+=================================================================================================== */
+void balanceByAngle()
+{
+  //de (work in progress)
+  float angleErr = tilt - 0;              // this the difference between where we are, and where we want to be (anglewise)
+  pid = pid_p_gain * angleErr;      // apply the multiplier for the P in PID
+                                          // ignore the I and D in PID, for now
+  if(pid >  400) pid = 400;               // range limit pid
+  if(pid < -400) pid = -400;
+  if(abs(pid) < 5) pid = 0;               // create a dead band to stop motors when robot is balanced
+
+  if(pid > 0) motorInt = int(    bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;  // motorInt is speed interval in timer ticks
+  if(pid < 0) motorInt = int( -1*bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;
+  if(pid == 0) motorInt = 0 ;
+
+  // experimental  motor speed change smoothing
+  int deltaSpd = smoother * (motorInt-lastSpeed);
+  motorInt = motorInt + deltaSpd;
+  lastSpeed = motorInt;
+  
+  noInterrupts();         // block any motor interrupts while we change control parameters
+  throttle_Lsetting = motorInt;
+  throttle_Rsetting = motorInt;
+  interrupts();
+
+  // Assemble balance telemetry string
+  //de would it be better to report angles in degrees or radians to MQTT?
+  String tmp = String(tilt) + "," + String(pid);
+  tmp = tmp + "," + String(motorInt) + "," + String(Balance.state);
+  if (baltelMsg.active) // If configured to write balance telemetry data
+  {
+    if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
+    {
+      Serial.print("<balanceByAngle> ");
+      Serial.println(tmp);
+    }    //if
+    else // Otherwise assume we are to send the data to the MQTT broker
+    {
+      publishMQTT("balance", tmp);
+    } //else
+  }   //if
+} // balanceByAngle
 
 /**
  * @brief Send updated metadata about the running of the code.
@@ -1029,7 +1204,7 @@ void calcBalanceParmeters(float angleRadians)
  * | Unknown command          | Number of unrecognized commands have been recieved. |
  * | Left DRV8825 fault       | Number of fault signals sent by the left DVR8825 stepper motor driver |
  * | Right DRV8825 fault      | Number of fault signals sent by the right DVR8825 stepper motor driver |
- */
+=================================================================================================== */
 void updateMetaData()
 {
   String tmp = String(metadata.wifiConAttemptsCnt);
@@ -1058,21 +1233,25 @@ void updateMetaData()
 
 /**
  * @brief Update OLED dipsplay 
- * @param angle Angle of robot lean in eulers. To convert to degrees use this formula: degrees = angle * 180 / PI
- * @note We are working with Yaw/Pitch/Roll data (and only using pitch). Other options include euler, quaternion, raw acceleration, 
+ * @param angle Angle of robot lean in radians. To convert to degrees use this formula: degrees = angle * 180 / PI
+ * @note We are working with Yaw/Pitch/Roll data (and only using roll). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
- */
+=================================================================================================== */
 void updateOLED(float angle)
 {
+  //de skip arg processing, use tilt in degrees directly?
   rightOLED.clear();
-  rightOLED.drawString(64, 20, String(angle * 180 / PI));
+  //de next line was:  rightOLED.drawString(64, 20, String(angle * 180 / PI));
+  rightOLED.drawString(0, 0, String("Ang: ")+String(tilt));
+  rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));
+  rightOLED.drawString(0, 32, String("PID: ")+String(pid));
   rightOLED.display();
   goOLED = millis() + tmrOLED; // Reset OLED update target time
 } //UpdateOLED()
 
 /**
  * @brief Set up a WiFi connection
- */
+=================================================================================================== */
 void setupWiFi()
 {
   scanNetworks();
@@ -1083,7 +1262,7 @@ void setupWiFi()
  * @brief Function called when a message appears on the command topic subsription 
  * @param topic 
  * @param message 
- */
+=================================================================================================== */
 void subscribed_callback(char *data, uint16_t len)
 {
   // Print out topic name and message
@@ -1094,7 +1273,7 @@ void subscribed_callback(char *data, uint16_t len)
 /**
  * @brief Set up communication with an MQTT broker
  * Refer to: https://learn.adafruit.com/introducing-the-adafruit-wiced-feather-wifi/adafruitmqtt
- */
+=================================================================================================== */
 void setupMQTT()
 {
   mqttClient.onConnect(onMqttConnect);
@@ -1104,11 +1283,12 @@ void setupMQTT()
   mqttClient.onMessage(onMqttMessage);
   mqttClient.onPublish(onMqttPublish);
   mqttClient.setServer(MQTT_BROKER_IP, MQTT_BROKER_PORT);
+
 } //setupMQTT()
 
 /**
  * @brief Set up the LED that is flashed by loop()
- */
+=================================================================================================== */
 void setupLED()
 {
   AMDP_PRINTLN("<setupLED> Enable LED pin");
@@ -1117,27 +1297,27 @@ void setupLED()
 
 /**
  * @brief Set up the OLED 
- */
+=================================================================================================== */
 void setupOLED()
 {
   AMDP_PRINTLN("<setupOLED> Initialize OLED");
   rightOLED.init();
-  rightOLED.setFont(ArialMT_Plain_24);
-  rightOLED.setTextAlignment(TEXT_ALIGN_CENTER);
-  rightOLED.drawString(64, 20, "My Demo"); //64,22
+  rightOLED.setFont(ArialMT_Plain_16);
+  rightOLED.setTextAlignment(TEXT_ALIGN_LEFT);
+  rightOLED.drawString(32, 20, "My Demo"); //64,22
   rightOLED.display();
   AMDP_PRINTLN("<setupOLED> Initialization of OLED complete");
 } //setupOLED()
 
 /**
- * @brief Set up the MPU6050 using DMP firmware and interrupts
- */
+ * @brief Set up the MPU6050 using DMP firmware but NO interrupts
+=================================================================================================== */
 void setupIMU()
 {
   // Initialize device
   AMDP_PRINTLN("<setupIMU> Initializing MPU6050...");
   mpu.initialize();
-  pinMode(gp_IMU_INT, INPUT);
+  // Rowbergs latest example sets up DMP interrupt, but doesn't use it. We'll leave interrupt support out.  
   // Verify connection
   AMDP_PRINTLN("<setupIMU> Testing MPU6050 connection...");
   bool tmp = mpu.testConnection();
@@ -1148,6 +1328,7 @@ void setupIMU()
   else
   {
     AMDP_PRINTLN("<setupIMU> MPU6050 connection failed. Halting boot up");
+    delay(1000);      // allow serial message to get out before system hangs
     while (1)
       ;
   } //else
@@ -1165,6 +1346,7 @@ void setupIMU()
     mpu.setYAccelOffset(robot.YAccelOffset);
     mpu.setZAccelOffset(robot.ZAccelOffset);
     // Generate offsets and calibrate MPU6050
+    // next 2 calls are not in the Rowberg example, but leaving them in for now
     mpu.CalibrateAccel(6);
     mpu.CalibrateGyro(6);
     AMDP_PRINTLN();
@@ -1172,19 +1354,12 @@ void setupIMU()
     // turn on the DMP, now that it's ready
     AMDP_PRINTLN("<setupIMU> Enabling DMP...");
     mpu.setDMPEnabled(true);
-    // enable Arduino interrupt detection
-    AMDP_PRINT("<setupIMU> Enabling DMP FIFO data ready GPIO pin ");
-    AMDP_PRINTLN(digitalPinToInterrupt(gp_IMU_INT));
-    AMDP_PRINTLN("<setupIMU> Attaching inetrrupt pin to dmpDataReady function");
-    attachInterrupt(digitalPinToInterrupt(gp_IMU_INT), dmpDataReady, RISING);
-    mpuIntStatus = mpu.getIntStatus();
-    AMDP_PRINT("<setupIMU> MPU initialization status = ");
-    AMDP_PRINTLN(mpuIntStatus);
+    AMDP_PRINTLN("<setupIMU> Intentionally NOT enabling DMP interrupts");    
     // get expected DMP packet size for later comparison
     packetSize = mpu.dmpGetFIFOPacketSize();
     AMDP_PRINT("<setupIMU> packetSize = ");
     AMDP_PRINTLN(packetSize);
-    // Initial read of DMP FIFO
+    Balance.method = bm_initialMethod;      // are we balancing by catchup distance, or angle deviation?
   }    //if
   else // If initialization failed
   {
@@ -1204,16 +1379,18 @@ void setupIMU()
       Serial.println("cause of failure unknown");
     } //if
     Serial.println("<setupIMU> Boot sequence halted");
-    while (1)
-      ; // loop forever thus halting boot up
+    delay(1000);      // allow serial message to get out before system hangs
+    // TODO handle improve handling of case where IMU has a startup problem    
+    while (1) ;       // loop forever thus halting boot up
   }     //else
 } //setupIMU()
 
 /**
  * @brief Set up robot specific configuration based on the ESP32 MAC address
- */
+=================================================================================================== */
 void cfgByMAC()
 {
+  tmpHostNameVar = myHostNameSuffix + myMACaddress;
   myMACaddress = formatMAC();
   if (myMACaddress == "BCDDC2F7D6D5") // This is Andrew's bot
   {
@@ -1232,10 +1409,11 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    MQTT_BROKER_IP = "192.168.2.21";
   }                                        //if
   else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
   {
-    AMDP_PRINTLN("<cfgByMAC> Setting up MAC BCDDC2F7D6D5 configuration - Doug");
+    AMDP_PRINTLN("<cfgByMAC> Setting up MAC B4E62D9EA8F9 configuration - Doug");
     robot.XGyroOffset = 60;
     robot.YGyroOffset = -10;
     robot.ZGyroOffset = -72;
@@ -1250,6 +1428,7 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    MQTT_BROKER_IP = "192.168.0.99";
   } //else if
   else
   {
@@ -1268,6 +1447,7 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    MQTT_BROKER_IP = "unrecognized MAC";
   } //else
   robot.wheelCircumference = robot.wheelDiameter * PI;
   robot.distancePerStep = robot.wheelCircumference / stepperMotor[RIGHT_MOTOR].stepsPerRev;
@@ -1279,7 +1459,7 @@ void cfgByMAC()
 
 /**
  * @brief Flash AMBER LED on fron panel button
- */
+=================================================================================================== */
 void updateLED()
 {
   blinkState = !blinkState;
@@ -1298,13 +1478,15 @@ boolean readIMU()
   if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer.
   {
     mpu.dmpGetQuaternion(&q, fifoBuffer);      // Get the latest packet of Quaternion data
-    mpu.dmpGetGravity(&gravity, &q);           // Get the latest packet of gravity data
-    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of Euler angles
+    mpu.dmpGetGravity(&gravity, &q);           // Get the latest packet of gravity data, using quaternion data
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of YPR angles, using gravity data
+    tilt = ypr[2] * RAD_TO_DEG - 90. ;         // get the Roll, relative to original IMU orientation & adjust
+    if (tilt < -180.) tilt = 90.;              // avoid abrupt change from +90 to -270, when he's past a face plant
+    Balance.tilt = tilt;                       // store tilt in its offical home in Balance struct
     metadata.dmpFifoDataPresentCnt++;          // Track how many times the FIFO pin goes high and the buffer has data in it
     rCode = true;
-    //    calcBalanceParmeters(ypr[2]); // Do balancing calculations
   }    //if
-  else // If DMP pin goes high but there is no data in the FIFO buffer then something weird happend
+  else // If sampling rate is reasonable, but no data is available then something weird happened
   {
     metadata.dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty
   }                                   //else
@@ -1316,22 +1498,22 @@ boolean readIMU()
  * @brief Create FreeRTOS timers that run callback functions in their own seperate FreeRTOS threads. 
  * @note For details abut FreeRTOS timers see https://www.freertos.org/FreeRTOS-timers-xTimerCreate.html
  * @note Timers are created but are not started at this point. xTimerStart is used later to start them.
- */
+=================================================================================================== */
 void setupFreeRTOStimers()
 {
-  int const wifiTimerPeriod = 2000;                                                            // Time in milliseconds between wifi timer events
-  int const mqttTimerPeriod = 2000;                                                            // Time in milliseconds between mqtt timer events
-  mqttReconnectTimer = xTimerCreate("mqttTimer",                                               // Human readable name assigned to timer
-                                    pdMS_TO_TICKS(mqttTimerPeriod),                            // set timer period. pdMS_TO_TICKS() converts milliseconds to ticks
-                                    pdFALSE,                                                   // Set reload to FALSE so this timer becomes dormant after one run
-                                    (void *)0,                                                 // Timer ID. Not used in our callback function
+  int const wifiTimerPeriod = 2000;                                    // Time in milliseconds between wifi timer events
+  int const mqttTimerPeriod = 2000;                                    // Time in milliseconds between mqtt timer events
+  mqttReconnectTimer = xTimerCreate("mqttTimer",                       // Human readable name assigned to timer
+                                    pdMS_TO_TICKS(mqttTimerPeriod),    // set timer period. pdMS_TO_TICKS() converts milliseconds to ticks
+                                    pdFALSE,                           // Set reload to FALSE so this timer becomes dormant after one run
+                                    (void *)0,                         // Timer ID. Not used in our callback function
                                     reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt)); // Function the timer calls when it expires
-  wifiReconnectTimer = xTimerCreate("wifiTimer",                                               // Human readable name assigned to timer
-                                    pdMS_TO_TICKS(wifiTimerPeriod),                            // set timer period. pdMS_TO_TICKS() converts milliseconds to ticks
-                                    pdFALSE,                                                   // Set reload to FALSE so this timer becomes dormant after one run
-                                    (void *)0,                                                 // Timer ID. Not used in our callback function
+  wifiReconnectTimer = xTimerCreate("wifiTimer",                       // Human readable name assigned to timer
+                                    pdMS_TO_TICKS(wifiTimerPeriod),    // set timer period. pdMS_TO_TICKS() converts milliseconds to ticks
+                                    pdFALSE,                           // Set reload to FALSE so this timer becomes dormant after one run
+                                    (void *)0,                         // Timer ID. Not used in our callback function
                                     reinterpret_cast<TimerCallbackFunction_t>(connectToWifi)); // Function the timer calls when it expires
-  if (mqttReconnectTimer == NULL)                                                              // Check result of xTimerCreate for mqtt timer
+  if (mqttReconnectTimer == NULL)                                      // Check result of xTimerCreate for mqtt timer
   {
     Serial.println("<setupFreeRTOStimers> Error. mqttTimer thread was not created");
   } //if
@@ -1343,7 +1525,7 @@ void setupFreeRTOStimers()
 
 /** @brief Configure GPIO pins for stepper motors
  * 
- */
+=================================================================================================== */
 void setupDriverMotors()
 {
   // Set up GPIO pins for the robot's right motor
@@ -1365,7 +1547,7 @@ void setupDriverMotors()
   // Set up right motor driver ISR
   AMDP_PRINTLN("<setupDriverMotors> Configure timer0 to control the right motor");
   uint8_t timerNumber = 0;                                               // Timer0 will be used to control the right motor
-  uint16_t prescaleDivider = 80;                                         // Timer0 will use a presaler (divider) of 80 so that each interrupt occur at 1us
+  uint16_t prescaleDivider = 80;                                         // Timer0 uses presaler (divider) of 80 so interrupts occur at 1us
   bool countUp = true;                                                   // Timer0 will count up not down
   rightMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);   // Set Timer0 configuration
   bool intOnEdge = true;                                                 // Interrupt on rising edge of Timer0 signal
@@ -1376,7 +1558,7 @@ void setupDriverMotors()
   // Set up left motor driver ISR
   AMDP_PRINTLN("<setupDriverMotors> Configure timer1 to control the left motor");
   timerNumber = 1;                                                     // Timer1 will be used to control the right motor
-  prescaleDivider = 80;                                                // Timer1 will use a presaler (divider) of 80 so that each interrupt occur at 1us
+  prescaleDivider = 80;                                                // Timer1 uses a presaler (divider) of 80 so interrupts occur at 1us
   countUp = true;                                                      // Timer1 will count up not down
   leftMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);  // Set Timer1 configuration
   timerAttachInterrupt(leftMotorTimer, &leftMotorTimerISR, intOnEdge); // Attach ISR to Timer1
@@ -1391,29 +1573,66 @@ void setupDriverMotors()
 
 /**
  * @brief Enable or disable motor based on robot angle
- */
-void checkTiltToActivateMotors()
+=================================================================================================== */
+void checkBalanceState()
 {
-  if (robotBalance.angleDegrees < 90 + robotBalance.maxAngleMotorActiveDegrees &&
-      robotBalance.angleDegrees > 90 - robotBalance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance
+//de check to see if there's been a change in the balance state, and if so, handle the transition
+  switch (Balance.state)
   {
-    if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
+    case bs_sleep:
     {
-      AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
-      digitalWrite(gp_DRV1_ENA, LOW);
-      digitalWrite(gp_DRV2_ENA, LOW);
-    }  //if
-  }    //if
-  else // otherwise robot has such a big tilt that it should not be trying to balance
-  {
-    if (digitalRead(gp_DRV1_ENA) == LOW) // If motor is currently turned off
-    {
-      AMDP_PRINTLN("<checkTiltToActivateMotors> Disable stepper motors");
-      digitalWrite(gp_DRV1_ENA, HIGH);
-      digitalWrite(gp_DRV2_ENA, HIGH);
-    } //if
-  }   //else
-} //checkTiltToActivateMotors()
+      //de  if (Balance.angleDegrees < 90 + Balance.maxAngleMotorActiveDegrees &&
+      //de      Balance.angleDegrees > 90 - Balance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance
+      if( abs(tilt) < Balance.maxAngleMotorActiveDegrees)  // if robot is within 30 degrees of vertical
+      {
+        if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
+        {
+          AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+          digitalWrite(gp_DRV1_ENA, LOW);
+          digitalWrite(gp_DRV2_ENA, LOW);
+        }  //if
+        Balance.state = bs_awake;       //de we're now waiting to hit almost vertical before going active
+        AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
+      }    // if (abs(tilt)
+
+      else // otherwise robot has such a big tilt that it should not be trying to balance
+      {
+        if (digitalRead(gp_DRV1_ENA) == LOW) // If motor is currently turned ON
+        {
+          AMDP_PRINTLN("<checkTiltToActivateMotors> Disable stepper motors");
+          digitalWrite(gp_DRV1_ENA, HIGH);
+          digitalWrite(gp_DRV2_ENA, HIGH);
+        } //if
+        //de ... and stay in bs_sleep state
+      }   //else
+      break;
+    } // case bs_sleep
+
+    case bs_awake:
+    { if(abs(tilt) <= Balance.activeAngle)      // are we almost vertical?
+      { Balance.state = bs_active;              // yes, so start trying to balance
+        AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
+      }
+      if(abs(tilt > Balance.maxAngleMotorActiveDegrees))
+      { Balance.state = bs_sleep;
+        AMDP_PRINTLN("<checkBalanceState> falling back to bs_sleep state");
+      }
+    break;
+
+    } // case bs_awake
+    case bs_active:
+    { if(abs(tilt) >= Balance.maxAngleMotorActiveDegrees)            // have we gone more than 30 degrees from vertical?
+      { Balance.state = bs_sleep;    // abort balancing efforts, and go back to waiting for less than 30 degrees tilt
+        throttle_Lsetting = 0;       // stop the motors
+        throttle_Rsetting = 0;
+        motorInt = 0;
+        AMDP_PRINTLN( "<checkBalanceState> entering state bs_sleep");
+
+      }                              //  sleep state will look after turning off motor enable
+    break;
+    } // case bs_active
+  } //switch(Balance.state)
+} //checkBalanceState()
 
 /**
  * @brief Set the robot's objective
@@ -1422,7 +1641,7 @@ void checkTiltToActivateMotors()
  * | Item                     | Details                                                                                               |
  * |:-------------------------|:------------------------------------------------------------------------------------------------------|
  * | stand                    | Tries to maintain an angle of 90 degrees and a COM distance from target of 0 inches |
- */
+=================================================================================================== */
 void setRobotObjective(int objective)
 {
   switch (objective)
@@ -1431,7 +1650,8 @@ void setRobotObjective(int objective)
   {
     AMDP_PRINTLN("<setRobotObjective> Robot objective now set to STAND");
     robotState.targetDistance = 0;      // Robot will try to keep COM at 0 inches
-    robotState.targetAngleDegrees = 90; // Robot will try to keep angle at 90 degrees (upright)
+  //de  next line was: robotState.targetAngleDegrees = 90; // Robot will try to keep angle at 90 degrees (upright)
+    robotState.targetAngleDegrees = 0; // Robot will try to keep angle at 0 degrees (upright)
     break;
   } //case
   default:
@@ -1444,13 +1664,12 @@ void setRobotObjective(int objective)
 
 /** 
  * @brief Standard set up routine for Arduino programs 
- */
+=================================================================================================== */
 void setup()
 {
   Wire.begin(gp_I2C_IMU_SDA, gp_I2C_IMU_SCL, I2C_bus1_speed);
   Serial.begin(115200); // Open a serial connection at 115200bps
-  while (!Serial)
-    ; // Wait for Serial port to be ready
+  while (!Serial) ;     // Wait for Serial port to be ready
   Serial.println(F("<setup> Start of setup"));
   cfgByMAC();                            // Use the devices MAC address to make specific configuration settings
   setRobotObjective(STATE_STAND_GROUND); // Assign robot the goal to stand upright
@@ -1461,31 +1680,41 @@ void setup()
   setupOLED();                           // Setup OLED communication
   setupIMU();                            // Set up IMU communication
   setupDriverMotors();                   // Set up the Stepper motors used to drive the robot motion
-  Serial.println(F("<setup> End of setup"));
   goOLED = millis() + tmrOLED;         // Reset OLED update counter
   goLED = millis() + tmrLED;           // Reset LED flashing counter
   goIMU = millis() + tmrIMU;           // Reset IMU update counter
   goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
   cntLoop = 0;                         // Reset counter that tracks how many iterations of loop() have occurred
+  Serial.println(F("<setup> End of setup"));
 } //setup()
 
 /**
  * @brief Standard looping routine for Arduino programs
- */
+=================================================================================================== */
 void loop()
 {
   cntLoop++; // Increment loop() counter
   if (WifiLastEvent != -1)
-    processWifiEvent(); // if there's a pending Wifi event, handle it
-  if ((millis() >= goIMU) && mpuInterrupt == true)
+    processWifiEvent();                   // if there's a pending Wifi event, handle it
+  if (millis() >= goIMU)
   {
-    boolean rCode = readIMU(); // Read the IMU. Balancing and data printing is handled in here as well
-    if (rCode)
+    boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
+    if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
-      calcBalanceParmeters(ypr[2]); // Do balancing calculations
-      checkTiltToActivateMotors();  // Enable or disable motor based on robot angle
-    }                               //if
-  }                                 //if
+      checkBalanceState();                // handle balance state changes: sleep, awake, active
+      if(Balance.state ==bs_active)       // if we're in a state where we can try to balance
+      {                                   // then do so, depending on which method we're using
+        if(Balance.method == bm_catchup)
+        {
+          //de suggest removing the arg in radians, and use stored tilt value in degrees
+          calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
+        } // if(Balance.method)
+        if(Balance.method == bm_angle)
+        { balanceByAngle();               // Do balancing calculation based on angle displacement from vertical 
+        }
+      } // if(Balance.state...)
+    }                               // if rCode
+  }                                 // if millis() > goIMU
   if (millis() >= goOLED)
     updateOLED(ypr[2]); // Control OLED display
   if (millis() >= goLED)
