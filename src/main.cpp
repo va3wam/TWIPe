@@ -1175,8 +1175,7 @@ void balanceByAngle()
   //d2  reverse direction of wheel rotation, based on observation of Dougs bot
   throttle_Lsetting = stepperMotor[LEFT_MOTOR].directionMod * motorInt;
   throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * motorInt;
-  throttle_Rsetting = -1* motorInt;
-  interrupts();
+   interrupts();
 
   // Assemble balance telemetry string
   //de would it be better to report angles in degrees or radians to MQTT?
@@ -1505,6 +1504,8 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    stepperMotor[RIGHT_MOTOR].directionMod = -1 ;        // rotate as directed by software, then reversed
+    stepperMotor[LEFT_MOTOR].directionMod = -1 ;  
     MQTT_BROKER_IP = "unrecognized MAC";
   } //else
   robot.wheelCircumference = robot.wheelDiameter * PI;
@@ -1513,6 +1514,7 @@ void cfgByMAC()
   AMDP_PRINTLN(robot.wheelCircumference);
   AMDP_PRINT("<cfgByMAC> Distance per step = ");
   AMDP_PRINTLN(robot.distancePerStep);
+  
 } //cfgByMAC()
 
 /**
