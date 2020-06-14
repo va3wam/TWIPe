@@ -9,6 +9,13 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+  * 0.0.14  2020-06-12 DE: reverse direction of wheels by multiplying motorInt by -1
+  *                    - add support for left OLED, and use it to display current setup() stage, and then network info
+  *                    - remove //de markers, except where code changes may be needed
+  *                     - move some (not all) balanceByAngle params and variables into structs
+  *                     - enhanced balance MQTT data, adding general purpose timestamps telMillis1 - 5
+  *                     - added MQTT data title publishing when balance state enters bs_active, ctntroled by balTelMsg.needTitles
+  *                     - adding MQTT publish of balance control params: pid gain, hi & lo speeds, smoother, tmrISU, once bot is bs_active
   * 0.0.13  2020-06-02 DE: jump the Version number to sync up with master on Git
   *                    - trim so source lines don't exceed 140 characters
   *                    - rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
@@ -150,13 +157,13 @@ typedef struct
   int activity = STATE_STAND_GROUND;      // The current objective that the robot is pursuing
   int parameter = STATE_PARAMETER_UNUSED; // A parameter used by some modes such as turn left and right
   float targetDistance = 0;               // Target distance robot wants to maintain
-  //de following line assumes vertical is zero degrees
   float targetAngleDegrees = 0;          // Target angle the robot wants to maintain to achieve the target distance. 0 = stay vertical
 } state;                                  // Structure for stepper motors that drive the robot
 static volatile state robotState;         // Object of states the robot is in pursuing vaious goals
 
 // Define OLED constants, classes and global variables
 SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
+SSD1306 leftOLED(leftOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);  // same I2C bus, but different address
 
 // Define LED constants, classes and global variables
 bool blinkState = false;
@@ -173,18 +180,7 @@ VectorInt16 gy;         // [x, y, z]            gyro sensor measurements
 VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
 VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
 VectorFloat gravity;    // [x, y, z]            gravity vector
-//de we don't use the following vector
-//de float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-//portMUX_TYPE dmpMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize variables between the DMP data ready ISR and loop()
-float tilt;             // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
-                        // same value is stored in Balance struct
-
-int $test;        //can we use dollar sign in variables? -yes
-//de int %test;   // percent? -no
-//de int @test;   // at-sign? no
-//de int ~test;   // tilde? -no 
-int _test;        // underscore at beginning?  -yes                  
 
 // Define global WiFi network information
 const char *mySSID = "NOTHING";
@@ -259,6 +255,13 @@ int goIMU = 0;                    // Target time for next read of IMU data
 int goOLED = 0;                   // Target time for next OLED update
 int goMETADATA = 0;               // Target time for next serial port
 int goLED = 0;                    // Target time for next toggle of LED
+// multi-purpose timestamp holders for telemetry purposes
+unsigned long telMilli1;          // timestamp used for telemetry reporting
+unsigned long telMilli2;          // timestamp used for telemetry reporting
+unsigned long telMilli3;          // timestamp used for telemetry reporting
+unsigned long telMilli4;          // timestamp used for telemetry reporting
+unsigned long telMilli5;          // timestamp used for telemetry reporting
+
 #define TARGET_CONSOLE 0
 #define TARGET_MQTT 1
 typedef struct
@@ -266,6 +269,7 @@ typedef struct
   boolean active = false;
   boolean destination = TARGET_CONSOLE;
   String message = "";
+  bool needTitles = false;                  // whether or not data title MQTT msg should be sent before next MQTT msg
 } messageControl;                           // Structure for handling messaging for key objects
 static volatile messageControl baltelMsg;   // Object that contains details for controlling balance telemetry messaging
 static volatile messageControl metadataMsg; // Object that contains details for controlling metadata messaging
@@ -275,12 +279,11 @@ typedef struct
   float tilt = 0;                            // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
   int method;                                // are we using catchup distance balancing method, or angle based PID (see defs below)
   int state = 0;                             // state within balancing process. see state definitions below, as in bs_start
-  float activeAngle = 2;                     //de how close to vertical, in degrees, before you start balancing attempt, & bs_active      
+  float activeAngle = 2;                     // how close to vertical, in degrees, before you start balancing attempt, & bs_active      
   float angleRadians = 0;                    // Robot tilt angle in radians
   float angleDegrees = 0;                    // Robot tilt angle in degrees - a copy of tilt for now
   //de  need to understand following line, and convert it to reflect vertical = 0 degrees
   float angleTargetRadians = 1.5707961;      // Target angle robot wants to be at in radians. 1.5707961 is standing upright
-  //de following line converted to vertical = 0 mode
   float angleTargetDegrees = 0;             // Target angle robot wants to be at in degrees. 0 is standing upright
   float maxAngleMotorActiveDegrees = 30;     // Maximum angle the robot can lean at before motors shut off
   float centreOfMassError = robot.heightCOM; // Distance in inches robot's Centre Of Mass (COM) is away from target
@@ -289,12 +292,12 @@ typedef struct
 } balanceControl;                            // Structure for handling robot balancing calculations
 volatile balanceControl Balance;             // Object for calculating robot balance
 
-//de values for Balance.state
+// values for Balance.state
 #define bs_sleep 0     // inactive. from lying on back until 30 degrees from vertical
 #define bs_awake 1     // within 30 degrees of initial vertical, but still not active
 #define bs_active 2    // has hit vertical, and is now trying to balance
 
-//de values for Balance.method
+// values for Balance.method
 #define bm_catchup 1   // method based on catchup distance that would pull wheels under the center of mass
 #define bm_angle 2     // method based on applying correction based in PID applied to angle difference from vertical
 #define bm_initialMethod bm_angle    // use this balancing method to start, initialized in setupIMU
@@ -304,12 +307,12 @@ volatile int throttle_Llimit, throttle_Rlimit;            // limit that determin
 volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
 float pid;                                                  // global so updateOLED() can find it
 
-float pid_p_gain = 50;       //de multiplier for the P part of PID
+float pid_p_gain = 20;       //de multiplier for the P part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
-int bot_slow =600;          //de  need to fit these into structures, but quick & dirty now
+int bot_slow =600;           //de  need to fit these into structures, but quick & dirty now
 int bot_fast = 300;
-float smoother = .5;          // smooth changes in speed by using new = old + smoother * (new - old)  
-int lastSpeed = 0;            // memory for above method using smoother
+float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
+int lastSpeed = 0;           // memory for above method using smoother
 
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
 
@@ -568,7 +571,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
 
 /**
  * @brief Handle CONNACK from the MQTT broker
- * @param sessionPresent persitent session available flag contained in CONNACK message from MQTT broker.
+ * @param sessionPresent persistent session available flag contained in CONNACK message from MQTT broker.
  * # CONNACK Message
  * The CONNACK message contains two data entries:
  * 1. The session present flag
@@ -1064,7 +1067,7 @@ void IRAM_ATTR rightMotorTimerISR()
 //TODO Put balance logic in here
 void IRAM_ATTR leftMotorTimerISR()
 {
-  if(Balance.method == bm_catchup)                //de this is the ISR for the catchup method of balancing
+  if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
   { 
     int motor = LEFT_MOTOR;
     noInterrupts();
@@ -1083,7 +1086,7 @@ void IRAM_ATTR leftMotorTimerISR()
     stepMotor(motor, tmp); 
   } // if(Balance.method == bm_catchup)
 
-  if(Balance.method == bm_angle)                //de this is the ISR for the angle method of balancing
+  if(Balance.method == bm_angle)                // this is the ISR for the angle method of balancing
   { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
     if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
     { throttle_Lcounter = 0;                    // yes, reset the counter, which goes upwards
@@ -1116,7 +1119,7 @@ void calcBalanceParmeters(float angleRadians)
   Balance.angleDegrees = Balance.angleRadians * 180 / PI;                        // Convert radians to degrees
   //de  does the math for the following assume vertical is 0 degrees, or 90 degrees?
   Balance.centreOfMassError = robot.heightCOM - (robot.heightCOM * sin(Balance.angleRadians)); // Calc distance COM is from 90 degrees
-  //de  Balance.COMError = robot.heightCOM * sin(tilt * DEG_TO_RAD);             // the catch-up distance
+  //de  Balance.COMError = robot.heightCOM * sin(Balance.tilt * DEG_TO_RAD);     // the catch-up distance
   Balance.steps = Balance.centreOfMassError / robot.distancePerStep;             // Calc # of steps needed to cover that distance
   interrupts();                                                                  // Allow other code to update balance variables again
   // Assemble balance telemetry string
@@ -1143,9 +1146,8 @@ void calcBalanceParmeters(float angleRadians)
 =================================================================================================== */
 void balanceByAngle()
 {
-  //de (work in progress)
-  float angleErr = tilt - 0;              // this the difference between where we are, and where we want to be (anglewise)
-  pid = pid_p_gain * angleErr;      // apply the multiplier for the P in PID
+  float angleErr = Balance.tilt - robotState.targetAngleDegrees;   // difference between current and desired angles
+  pid = pid_p_gain * angleErr;            // apply the multiplier for the P in PID
                                           // ignore the I and D in PID, for now
   if(pid >  400) pid = 400;               // range limit pid
   if(pid < -400) pid = -400;
@@ -1156,19 +1158,24 @@ void balanceByAngle()
   if(pid == 0) motorInt = 0 ;
 
   // experimental  motor speed change smoothing
-  int deltaSpd = smoother * (motorInt-lastSpeed);
-  motorInt = motorInt + deltaSpd;
-  lastSpeed = motorInt;
+  // smoother is a variable, and the control parameter - smoother == 0 means don't smooth
+  if(smoother != 0)                       // if smoothing is enabled, do it
+  {
+    int deltaSpd = smoother * (motorInt-lastSpeed);
+    motorInt = motorInt + deltaSpd;
+    lastSpeed = motorInt;
+  }
   
   noInterrupts();         // block any motor interrupts while we change control parameters
-  throttle_Lsetting = motorInt;
-  throttle_Rsetting = motorInt;
+  //d2  reverse direction of wheel rotation, based on observation of Dougs bot
+  throttle_Lsetting = -1* motorInt;
+  throttle_Rsetting = -1* motorInt;
   interrupts();
 
   // Assemble balance telemetry string
   //de would it be better to report angles in degrees or radians to MQTT?
-  String tmp = String(tilt) + "," + String(pid);
-  tmp = tmp + "," + String(motorInt) + "," + String(Balance.state);
+  String tmp = String(telMilli1) +"," + String(telMilli2) + "," + String(telMilli3) + "," + String(telMilli4) + "," 
+   + String(telMilli5) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt) + "," + String(Balance.state);
   if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
@@ -1178,20 +1185,27 @@ void balanceByAngle()
     }    //if
     else // Otherwise assume we are to send the data to the MQTT broker
     {
+      if( baltelMsg.needTitles == true)         // do we need to publish MQTT column titles?
+      { baltelMsg.needTitles = false;           // yes, but only send titles once per active state entry
+
+        publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");
+        publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
+        publishMQTT("balance", "SO-readIMI,after-readFIFO,after-dmpGet*,after-readIMU,after-BalByAngle,tilt,pid,MotorInt,Bal.state");
+      }
       publishMQTT("balance", tmp);
     } //else
   }   //if
 } // balanceByAngle
 
-/**
+/**`
  * @brief Send updated metadata about the running of the code.
  * # Metadata
  * There are a number of data points that the TWIPe code tracks in order to assess how the robot's logic is performing. These data 
  * points can be used to pinpoint the cause of perfomance issues as well as play a key role in debugging. Metadata is always being 
- * issued from the updateMetaData() function. When the metaDataON command is recieved all metadata is directed to the MQTT 
- * broker. When the command metaDataOFF is recieved all metadata is directed to the serial port. NOte that all the the items in the 
+ * issued from the updateMetaData() function. When the metaDataON command is received all metadata is directed to the MQTT 
+ * broker. When the command metaDataOFF is received all metadata is directed to the serial port. NOte that all the the items in the 
  * table below are found in the payload of the MQTT message. The payload starts with a time stamp in millis() and then is followed 
- * by each of the items in the table below. Each item is seperated by a comma. 
+ * by each of the items in the table below. Each item is separated by a comma. 
  * ## Table of metadata tracked 
  * | Item                     | Details                                                                                               |
  * |:-------------------------|:------------------------------------------------------------------------------------------------------|
@@ -1232,22 +1246,50 @@ void updateMetaData()
 } // updateMetaData()
 
 /**
+ * @brief Update Left OLED display with network info: MAC, IP, AccessPoint, Hostname
+ * @param 
+ * @note This routine is called at end of setup() and from updateRightOLED()   
+=================================================================================================== */
+void updateLeftOLEDNetInfo()
+{
+  leftOLED.clear();
+  leftOLED.drawString(0, 0, String(myIPAddress));
+  leftOLED.drawString(0, 16, String(myMACaddress));
+  leftOLED.drawString(0, 32, String(myAccessPoint));
+  leftOLED.drawString(0, 48, String(myHostName));
+  leftOLED.display();
+} //UpdateLeftOLEDNetInfo()
+
+/**
  * @brief Update OLED dipsplay 
  * @param angle Angle of robot lean in radians. To convert to degrees use this formula: degrees = angle * 180 / PI
  * @note We are working with Yaw/Pitch/Roll data (and only using roll). Other options include euler, quaternion, raw acceleration, 
  * raw gyro, linear acceleration and gravity. See MPU6050_6Axis_MotionApps_V6_12.h for more details.   
 =================================================================================================== */
-void updateOLED(float angle)
+void updateRightOLED()
 {
-  //de skip arg processing, use tilt in degrees directly?
   rightOLED.clear();
-  //de next line was:  rightOLED.drawString(64, 20, String(angle * 180 / PI));
-  rightOLED.drawString(0, 0, String("Ang: ")+String(tilt));
+  rightOLED.drawString(0, 0, String("Ang: ")+String(Balance.tilt));
   rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));
   rightOLED.drawString(0, 32, String("PID: ")+String(pid));
   rightOLED.display();
+  updateLeftOLEDNetInfo();    // put MAC, IP, AccessPoint and Hostname onto left OLED
   goOLED = millis() + tmrOLED; // Reset OLED update target time
-} //UpdateOLED()
+} //UpdateRightOLED()
+
+/**
+ * @brief Update left OLED dipsplay with current routine being executed within setup()
+ * @param stage string indicating the stage within setup() we are about to start
+ * @note This routine is only called during the initial execution of setup()   
+=================================================================================================== */
+void updateLeftOLED(String stage)
+{
+  leftOLED.clear();
+  leftOLED.drawString(0, 0, String("   Setup() Stage: "));
+  leftOLED.drawString(0, 32, String("> ")+String(stage));
+ // rightOLED.drawString(0, 32, String("PID: ")+String(pid));
+  leftOLED.display();
+} //UpdateLeftOLED()
 
 /**
  * @brief Set up a WiFi connection
@@ -1300,13 +1342,19 @@ void setupLED()
 =================================================================================================== */
 void setupOLED()
 {
-  AMDP_PRINTLN("<setupOLED> Initialize OLED");
+  AMDP_PRINTLN("<setupOLED> Initialize L & R OLEDs");
   rightOLED.init();
   rightOLED.setFont(ArialMT_Plain_16);
   rightOLED.setTextAlignment(TEXT_ALIGN_LEFT);
   rightOLED.drawString(32, 20, "My Demo"); //64,22
   rightOLED.display();
-  AMDP_PRINTLN("<setupOLED> Initialization of OLED complete");
+
+  leftOLED.init();
+  leftOLED.setFont(ArialMT_Plain_16);
+  leftOLED.setTextAlignment(TEXT_ALIGN_LEFT);
+  leftOLED.drawString(32, 20, "My Demo"); //64,22
+  leftOLED.display();
+  AMDP_PRINTLN("<setupOLED> Initialization of L & R OLEDs complete");
 } //setupOLED()
 
 /**
@@ -1476,13 +1524,15 @@ boolean readIMU()
 {
   boolean rCode = false;
   if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer.
-  {
+  { 
+    telMilli2 = millis();                      // telemetry timestamp (gives get fifo info execution time))
     mpu.dmpGetQuaternion(&q, fifoBuffer);      // Get the latest packet of Quaternion data
     mpu.dmpGetGravity(&gravity, &q);           // Get the latest packet of gravity data, using quaternion data
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of YPR angles, using gravity data
-    tilt = ypr[2] * RAD_TO_DEG - 90. ;         // get the Roll, relative to original IMU orientation & adjust
-    if (tilt < -180.) tilt = 90.;              // avoid abrupt change from +90 to -270, when he's past a face plant
-    Balance.tilt = tilt;                       // store tilt in its offical home in Balance struct
+    telMilli3 = millis();                      // telemetry timestamp (gives Rowberg routine execution time))
+
+    Balance.tilt = ypr[2] * RAD_TO_DEG - 90. ; // get the Roll, relative to original IMU orientation & adjust
+    if (Balance.tilt < -180.) Balance.tilt = 90.;     // avoid abrupt change from +90 to -270, when he's past a face plant
     metadata.dmpFifoDataPresentCnt++;          // Track how many times the FIFO pin goes high and the buffer has data in it
     rCode = true;
   }    //if
@@ -1576,14 +1626,12 @@ void setupDriverMotors()
 =================================================================================================== */
 void checkBalanceState()
 {
-//de check to see if there's been a change in the balance state, and if so, handle the transition
+// check to see if there's been a change in the balance state, and if so, handle the transition
   switch (Balance.state)
   {
     case bs_sleep:
     {
-      //de  if (Balance.angleDegrees < 90 + Balance.maxAngleMotorActiveDegrees &&
-      //de      Balance.angleDegrees > 90 - Balance.maxAngleMotorActiveDegrees) // If robot is upright enough to try and balance
-      if( abs(tilt) < Balance.maxAngleMotorActiveDegrees)  // if robot is within 30 degrees of vertical
+      if( abs(Balance.tilt) < Balance.maxAngleMotorActiveDegrees)  // if robot is within 30 degrees of vertical
       {
         if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
         {
@@ -1591,9 +1639,9 @@ void checkBalanceState()
           digitalWrite(gp_DRV1_ENA, LOW);
           digitalWrite(gp_DRV2_ENA, LOW);
         }  //if
-        Balance.state = bs_awake;       //de we're now waiting to hit almost vertical before going active
+        Balance.state = bs_awake;       // we're now waiting to hit almost vertical before going active
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
-      }    // if (abs(tilt)
+      }    // if (abs(Balance.tilt)
 
       else // otherwise robot has such a big tilt that it should not be trying to balance
       {
@@ -1603,17 +1651,18 @@ void checkBalanceState()
           digitalWrite(gp_DRV1_ENA, HIGH);
           digitalWrite(gp_DRV2_ENA, HIGH);
         } //if
-        //de ... and stay in bs_sleep state
+        // ... and stay in bs_sleep state
       }   //else
       break;
     } // case bs_sleep
 
     case bs_awake:
-    { if(abs(tilt) <= Balance.activeAngle)      // are we almost vertical?
+    { if(abs(Balance.tilt) <= Balance.activeAngle)      // are we almost vertical?
       { Balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
+        baltelMsg.needTitles =  true;           // before next MQTT balance message, output msg showing column definitions
       }
-      if(abs(tilt > Balance.maxAngleMotorActiveDegrees))
+      if(abs(Balance.tilt > Balance.maxAngleMotorActiveDegrees))    // if we're more than 30 degress from vertical...
       { Balance.state = bs_sleep;
         AMDP_PRINTLN("<checkBalanceState> falling back to bs_sleep state");
       }
@@ -1621,7 +1670,7 @@ void checkBalanceState()
 
     } // case bs_awake
     case bs_active:
-    { if(abs(tilt) >= Balance.maxAngleMotorActiveDegrees)            // have we gone more than 30 degrees from vertical?
+    { if(abs(Balance.tilt) >= Balance.maxAngleMotorActiveDegrees)       // have we gone more than 30 degrees from vertical?
       { Balance.state = bs_sleep;    // abort balancing efforts, and go back to waiting for less than 30 degrees tilt
         throttle_Lsetting = 0;       // stop the motors
         throttle_Rsetting = 0;
@@ -1671,15 +1720,25 @@ void setup()
   Serial.begin(115200); // Open a serial connection at 115200bps
   while (!Serial) ;     // Wait for Serial port to be ready
   Serial.println(F("<setup> Start of setup"));
+  
+  setupOLED();                           // Setup OLED communication early, so we can show setup() stages
+   updateLeftOLED("cfgByMAC");           // display setup routine we are about to execute in bot's right eye
   cfgByMAC();                            // Use the devices MAC address to make specific configuration settings
+   updateLeftOLED("setRobotObjective");           // display setup routine we are about to execute in bot's right eye
   setRobotObjective(STATE_STAND_GROUND); // Assign robot the goal to stand upright
+   updateLeftOLED("setupLED");           // display setup routine we are about to execute in bot's right eye
   setupLED();                            // Set up the LED that the loop() flashes
+   updateLeftOLED("setupFreeRTOStimers");           // display setup routine we are about to execute in bot's right eye
   setupFreeRTOStimers();                 //  User timer based FreeRTOS threads to manage a number of asynchronous tasks
+   updateLeftOLED("setupMQTT");           // display setup routine we are about to execute in bot's right eye
   setupMQTT();                           // Set up MQTT communication
+   updateLeftOLED("setupWiFi");           // display setup routine we are about to execute in bot's right eye
   setupWiFi();                           // Set up WiFi communication
-  setupOLED();                           // Setup OLED communication
+   updateLeftOLED("setupIMU");           // display setup routine we are about to execute in bot's right eye
   setupIMU();                            // Set up IMU communication
+   updateLeftOLED("setupDriverMotors");           // display setup routine we are about to execute in bot's right eye
   setupDriverMotors();                   // Set up the Stepper motors used to drive the robot motion
+  updateLeftOLEDNetInfo();             // aftersetup's done, show IP, MAC, AccessPoint and Hostname in left OLED
   goOLED = millis() + tmrOLED;         // Reset OLED update counter
   goLED = millis() + tmrLED;           // Reset LED flashing counter
   goIMU = millis() + tmrIMU;           // Reset IMU update counter
@@ -1698,7 +1757,9 @@ void loop()
     processWifiEvent();                   // if there's a pending Wifi event, handle it
   if (millis() >= goIMU)
   {
+    telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
     boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
+    telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
       checkBalanceState();                // handle balance state changes: sleep, awake, active
@@ -1706,17 +1767,18 @@ void loop()
       {                                   // then do so, depending on which method we're using
         if(Balance.method == bm_catchup)
         {
-          //de suggest removing the arg in radians, and use stored tilt value in degrees
+          //de suggest removing the arg in radians, and use stored Balance.tilt value in degrees
           calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
         } // if(Balance.method)
         if(Balance.method == bm_angle)
-        { balanceByAngle();               // Do balancing calculation based on angle displacement from vertical 
+        { balanceByAngle();               // Do balancing calculation based on angle displacement from vertical
+        telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
         }
       } // if(Balance.state...)
     }                               // if rCode
   }                                 // if millis() > goIMU
   if (millis() >= goOLED)
-    updateOLED(ypr[2]); // Control OLED display
+    updateRightOLED();                   // replace contents of right OLED display
   if (millis() >= goLED)
     updateLED(); // Update the OLED with data
   if (millis() >= goMETADATA)
