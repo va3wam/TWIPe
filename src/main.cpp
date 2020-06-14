@@ -9,6 +9,10 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+  * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
+  *                     -move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
+  *                     -remove Balance.state from balance telemetry - not useful
+  *                     -parameterize motor wheel direction differences between bots
   * 0.0.14  2020-06-12 DE: reverse direction of wheels by multiplying motorInt by -1
   *                    - add support for left OLED, and use it to display current setup() stage, and then network info
   *                    - remove //de markers, except where code changes may be needed
@@ -241,12 +245,13 @@ typedef struct
   int speedRange = 300;                       // Range of speed the motor is effective at. Add to minSpeed to get max speed
   int interval = 600;                         // Delay time (microseconds) used for motor PWM. smaller number -> higher motor speed
   int stepsPerRev = 200;                      // How many steps it takes to do a full 360 degree rotation
+  int directionMod = 1;                       // controls if motor direction needs to be reversed base on motor hardware
 } motorControl;                               // Structure for stepper motors that drive the robot
 static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 = right motor, 1 = left motor
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU 100                 // Milliseconds to wait between reading data to IMU over I2C
+#define tmrIMU 20                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -1168,14 +1173,15 @@ void balanceByAngle()
   
   noInterrupts();         // block any motor interrupts while we change control parameters
   //d2  reverse direction of wheel rotation, based on observation of Dougs bot
-  throttle_Lsetting = -1* motorInt;
+  throttle_Lsetting = stepperMotor[LEFT_MOTOR].directionMod * motorInt;
+  throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * motorInt;
   throttle_Rsetting = -1* motorInt;
   interrupts();
 
   // Assemble balance telemetry string
   //de would it be better to report angles in degrees or radians to MQTT?
   String tmp = String(telMilli1) +"," + String(telMilli2) + "," + String(telMilli3) + "," + String(telMilli4) + "," 
-   + String(telMilli5) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt) + "," + String(Balance.state);
+   + String(telMilli5) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt);
   if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
@@ -1190,7 +1196,7 @@ void balanceByAngle()
 
         publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");
         publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
-        publishMQTT("balance", "SO-readIMI,after-readFIFO,after-dmpGet*,after-readIMU,after-BalByAngle,tilt,pid,MotorInt,Bal.state");
+        publishMQTT("balance", "SO-readIMU,after-readFIFO,after-dmpGet*,after-readIMU,after-BalByAngle,tilt,pid,MotorInt");
       }
       publishMQTT("balance", tmp);
     } //else
@@ -1457,6 +1463,8 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    stepperMotor[RIGHT_MOTOR].directionMod = 1 ;        // rotate as directed by software
+    stepperMotor[LEFT_MOTOR].directionMod = 1 ;  
     MQTT_BROKER_IP = "192.168.2.21";
   }                                        //if
   else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
@@ -1476,6 +1484,8 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
+    stepperMotor[RIGHT_MOTOR].directionMod = -1 ;        // rotate as directed by software, then reversed
+    stepperMotor[LEFT_MOTOR].directionMod = -1 ;  
     MQTT_BROKER_IP = "192.168.0.99";
   } //else if
   else
@@ -1540,7 +1550,7 @@ boolean readIMU()
   {
     metadata.dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty
   }                                   //else
-  goIMU = millis() + tmrIMU;          // Reset IMU update counter
+  // goIMU = millis() + tmrIMU;          // Reset IMU update counter. do this in loop() instead
   return rCode;
 } // readIMU()
 
@@ -1757,6 +1767,7 @@ void loop()
     processWifiEvent();                   // if there's a pending Wifi event, handle it
   if (millis() >= goIMU)
   {
+    goIMU = millis() + tmrIMU;            // Reset IMU update counter right away.
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
     boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
     telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
