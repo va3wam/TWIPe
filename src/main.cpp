@@ -10,9 +10,11 @@
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
   * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
-  *                     -move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
-  *                     -remove Balance.state from balance telemetry - not useful
-  *                     -parameterize motor wheel direction differences between bots
+  *                     - move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
+  *                     - remove Balance.state from balance telemetry - not useful
+  *                     - parameterize motor wheel direction differences between bots
+  *                     - add runFlags so telemetry can show what routines have run recently
+  *                     - recode balance telemetry to send calculated intervals rather than timestamps
   * 0.0.14  2020-06-12 DE: reverse direction of wheels by multiplying motorInt by -1
   *                    - add support for left OLED, and use it to display current setup() stage, and then network info
   *                    - remove //de markers, except where code changes may be needed
@@ -228,6 +230,7 @@ String cmdTopicMQTT = "NOTHING"; // Full path to incoming command topic from MQT
 String balTopicMQTT = "NOTHING"; // Full path to outgoing balance telemetry topic to MQTT broker
 String metTopicMQTT = "NOTHING"; // Full path to outgoing metadata topic to MQTT broker
 
+
 // Define global motor control variables and structures. Also define pointers and muxing for multitasking motors via ISRs
 #define motorISRus 20               // Number of microseconds between motor ISR calls
 #define RIGHT_MOTOR 0               // Index value of right motor array
@@ -262,10 +265,66 @@ int goMETADATA = 0;               // Target time for next serial port
 int goLED = 0;                    // Target time for next toggle of LED
 // multi-purpose timestamp holders for telemetry purposes
 unsigned long telMilli1;          // timestamp used for telemetry reporting
+unsigned long holdMilli1;         // need to keep last value to calculate delta time for goIMU calls
 unsigned long telMilli2;          // timestamp used for telemetry reporting
 unsigned long telMilli3;          // timestamp used for telemetry reporting
 unsigned long telMilli4;          // timestamp used for telemetry reporting
+unsigned long holdMilli4;         // need to retain old value for balanceByAngle telemetry calculation
 unsigned long telMilli5;          // timestamp used for telemetry reporting
+
+unsigned long tm_IMUdelta;        // telemetry value: how long between goIMU calls. should be tmrIMU
+unsigned long tm_readFIFO;        // telemetry value: how long the mpu.dmpGetCurrentFIFOPacket(fifoBuffer) execution took
+unsigned long tm_dmpGet;          // telemetry value: how long the dmpGet* calls after above call took
+unsigned long tm_allReadIMU;      // telemetry value: how long the readIMU execution took
+unsigned long tm_OldbalByAng;     // telemetry value: how long the PREVIOUS balanceByAngle took
+
+unsigned long runFlagWord;        // telemetry word with bit coded flags indicating if a routine has run since last telemetry
+                                  // the indicated routine has runbit(n); at its beginning, where n is it's bit number, 0 - 31
+                                  // the runFlagWord is cleared after each balance telemetry publish
+                                  
+#define runbit(x)   runFlagWord  |= 1 << x;
+
+// runbit(0)   1  IRAM_ATTR leftDRV8825fault
+// runbit(1)   1  IRAM_ATTR rightDRV8825fault
+// runbit(2)   1  connectToWifi
+// runbit(3)___1  connectToMqtt
+// runbit(4)   1  WiFiEvent
+// runbit(5)   1  processWifiEvent
+// runbit(6)   1  onMqttConnect
+// runbit(7)___1  onMqttDisconnect
+// runbit(8)   1  onMqttSubscribe
+// runbit(9)   1  onMqttUnsubscribe
+// runbit(10)   1  onMqttMessage
+// runbit(11)___1  onMqttPublish
+//              0  connectToNetwork
+//              0  scanNetworks
+//              0  printBinary
+// runbit(12)   1  publishMQTT
+// runbit(13)   1  stepMotor
+// runbit(14)   1  IRAM_ATTR rightMotorTimerISR
+// runbit(15)___1  IRAM_ATTR leftMotorTimerISR
+// runbit(16)   1  calcBalanceParmeters
+//              0  balanceByAngle
+// runbit(17)   1  updateMetaData
+// runbit(18)   1  updateLeftOLEDNetInfo
+// runbit(19)___1  updateRightOLED
+// runbit(20)   1  updateLeftOLED
+// runbit(21)   1  setupWiFi
+// runbit(22)   1  subscribed_callback
+// runbit(23)___1  setupMQTT
+//              0  setupLED
+//              0  setupOLEDupdate LED
+//              0  setupIMU
+//              0  cfgByMAC
+// runbit(24)   1  updateLED
+// runbit(25)   1  setupFreeRTOStimers
+// runbit(26)   1  setupDriverMotors
+// runbit(27)___1  checkBalanceState
+// runbit(28)   1  setRobotObjective
+//              0  setup
+//              0  loop
+
+
 
 #define TARGET_CONSOLE 0
 #define TARGET_MQTT 1
@@ -330,7 +389,7 @@ typedef struct
   int dmpFifoDataPresentCnt = 0; // Track how many times the FIFO pin goes high and there is data in the buffer
   int wifiDropCnt = 0;           // Track how many times connection to the WiFi network has occurred
   int mqttDropCnt = 0;           // Track how many times connection to the MQTT server is lost
-  int unknownCmdCnt = 0;         // Track how many unknown command have been recieved
+  int unknownCmdCnt = 0;         // Track how many unknown command have been received
   int leftDRVfault = 0;          // Track how many times the left DVR8825 motor driver signals a fault
   int rightDRVfault = 0;         // Track how many times the right DVR8825 motor driver signals a fault
   //TODO Put datapoint below to use
@@ -377,6 +436,7 @@ String formatMAC()
 ===================================================================================================*/
 void IRAM_ATTR leftDRV8825fault()
 {
+  runbit(0) ;
   //  portENTER_CRITICAL_ISR(&leftDRVMux);
 
   metadata.leftDRVfault++;
@@ -389,6 +449,7 @@ void IRAM_ATTR leftDRV8825fault()
 =================================================================================================== */
 void IRAM_ATTR rightDRV8825fault()
 {
+  runbit(1) ;
   //  portENTER_CRITICAL_ISR(&rightDRVMux);
   metadata.rightDRVfault++;
   //  portEXIT_CRITICAL_ISR(&rightDRVMux);
@@ -415,6 +476,7 @@ String ipToString(IPAddress ip)
 =================================================================================================== */
 void connectToWifi()
 {
+  runbit(2) ;
   metadata.wifiConAttemptsCnt++; // Increment the number of attempts made to connect to the Access Point
   AMDP_PRINT("<connectToWiFi> Attempt #");
   AMDP_PRINT(metadata.wifiConAttemptsCnt);
@@ -429,6 +491,7 @@ void connectToWifi()
 =================================================================================================== */
 void connectToMqtt()
 {
+  runbit(3) ;
   AMDP_PRINTLN("<connectToMqtt> Connecting to MQTT...");
   mqttClient.connect();
   metadata.mqttConAttemptsCnt++; // Increment the number of attempts made to connect to the MQTT broker
@@ -488,6 +551,7 @@ void connectToMqtt()
 =================================================================================================== */
 void WiFiEvent(WiFiEvent_t event)
 {
+  runbit(4) ;
   AMDP_PRINT("<WifiEvent> saw event number: ");
   AMDP_PRINT(event);
   AMDP_PRINTLN(String(" = ") + wifiEv[event]);
@@ -507,6 +571,7 @@ void WiFiEvent(WiFiEvent_t event)
 =================================================================================================== */
 void processWifiEvent() // called fron loop() to handle event ID stored in WifiLastEvent
 {
+  runbit(5) ;
   int event = WifiLastEvent; // retrieve last event that occurred
   WifiLastEvent = -1;        // and say that we've processed it
 //  String tmpHostNameVar;     // Hold WiFi host name created in this function
@@ -605,6 +670,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
 =================================================================================================== */
 void onMqttConnect(bool sessionPresent)
 {
+  runbit(6) ;
   AMDP_PRINTLN("<onMqttConnect> Connected to MQTT");
   AMDP_PRINT("<onMqttConnect> Session present: ");
   AMDP_PRINTLN(sessionPresent);
@@ -621,6 +687,7 @@ void onMqttConnect(bool sessionPresent)
 =================================================================================================== */
 void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 {
+  runbit(7) ;
   AMDP_PRINTLN("<onMqttDisconnect> Disconnected from MQTT");
   metadata.mqttDropCnt++; // Increment the counter for the number of MQTT connection drops
   metadata.mqttConAttemptsCnt++;
@@ -657,6 +724,7 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 =================================================================================================== */
 void onMqttSubscribe(uint16_t packetId, uint8_t qos)
 {
+  runbit(8) ;
   AMDP_PRINTLN("<onMqttSubscribe> Subscribe acknowledged by broker.");
   AMDP_PRINT("<onMqttSubscribe>  PacketId: ");
   AMDP_PRINTLN(packetId);
@@ -674,6 +742,7 @@ void onMqttSubscribe(uint16_t packetId, uint8_t qos)
 =================================================================================================== */
 void onMqttUnsubscribe(uint16_t packetId)
 {
+  runbit(9) ;
   AMDP_PRINTLN("Unsubscribe acknowledged.");
   AMDP_PRINT("  packetId: ");
   AMDP_PRINTLN(packetId);
@@ -718,6 +787,7 @@ void onMqttUnsubscribe(uint16_t packetId)
 =================================================================================================== */
 void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
 {
+  runbit(10) ;
   AMDP_PRINT("<onMqttMessage> Publish received.");
   AMDP_PRINT("<onMqttMessage>  topic: ");
   AMDP_PRINTLN(topic);
@@ -781,7 +851,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   else
   {
     AMDP_PRINTLN("<onMqttMessage> Unknown command. Doing nothing");
-    metadata.unknownCmdCnt++; // Increment the counter that tracks how many unknown commands have been recieved
+    metadata.unknownCmdCnt++; // Increment the counter that tracks how many unknown commands have been received
   }                           //else
 } //onMqttMessage()
 
@@ -791,6 +861,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 =================================================================================================== */
 void onMqttPublish(uint16_t packetId)
 {
+  runbit(11) ;
   AMDP_PRINTLN("Publish acknowledged.");
   AMDP_PRINT("  packetId: ");
   AMDP_PRINTLN(packetId);
@@ -965,6 +1036,7 @@ void printBinary(byte v, int8_t num_places)
 =================================================================================================== */
 void publishMQTT(String topic, String msg)
 {
+  runbit(12) ;
   char tmp[NUMBER_OF_MILLI_DIGITS];
   itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);
   String message = String(tmp) + "," + msg;
@@ -995,6 +1067,7 @@ void publishMQTT(String topic, String msg)
 =================================================================================================== */
 void stepMotor(int index, uint mod)
 {
+runbit(13) ;  
   uint8_t gpioPin[2]; // Create 2 element array to hold values of the left and right motor pins
   gpioPin[RIGHT_MOTOR] = gp_DRV1_STEP; // Element 0 holds right motor GPIO pin value
   gpioPin[LEFT_MOTOR] = gp_DRV2_STEP; // Element 1 holds left motor GPIO pin value
@@ -1027,6 +1100,7 @@ void stepMotor(int index, uint mod)
 //TODO Put balance logic in here
 void IRAM_ATTR rightMotorTimerISR()
 {
+  runbit(14) ;
   if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
   { 
       int motor = RIGHT_MOTOR;
@@ -1072,6 +1146,7 @@ void IRAM_ATTR rightMotorTimerISR()
 //TODO Put balance logic in here
 void IRAM_ATTR leftMotorTimerISR()
 {
+  runbit(15) ;
   if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
   { 
     int motor = LEFT_MOTOR;
@@ -1116,6 +1191,7 @@ void IRAM_ATTR leftMotorTimerISR()
 =================================================================================================== */
 void calcBalanceParmeters(float angleRadians)
 {
+  runbit(16) ;
 //de suggest removing function argument, and using stored tilt value
 //de  disabling interrupts isn't effective because angle updates are done in background, in readIMU  
   noInterrupts();      // Prevent other code from updating balance variables while we are changing them
@@ -1178,9 +1254,14 @@ void balanceByAngle()
    interrupts();
 
   // Assemble balance telemetry string
-  //de would it be better to report angles in degrees or radians to MQTT?
-  String tmp = String(telMilli1) +"," + String(telMilli2) + "," + String(telMilli3) + "," + String(telMilli4) + "," 
-   + String(telMilli5) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt);
+
+  char flagsInHex[12];                // buffer space for hex string representing runFlagWord
+  itoa(runFlagWord,flagsInHex,16);    // convert flags to hex string
+  runFlagWord = 0 ;                   // clear flags ASAP, so new routines are seen
+
+  String tmp = String(tm_IMUdelta) +"," + String(tm_readFIFO) + "," + String(tm_dmpGet) + "," + String(tm_allReadIMU) + "," 
+   + String(tm_OldbalByAng) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt)
+   + "," + flagsInHex;
   if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
@@ -1195,7 +1276,7 @@ void balanceByAngle()
 
         publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");
         publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
-        publishMQTT("balance", "SO-readIMU,after-readFIFO,after-dmpGet*,after-readIMU,after-BalByAngle,tilt,pid,MotorInt");
+        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags");
       }
       publishMQTT("balance", tmp);
     } //else
@@ -1220,12 +1301,13 @@ void balanceByAngle()
  * | MQTT drop                | Number of times an MQTT connection dropped     
  * | MPU6050 DMP read success | Successful attempts to read from the MPU6050 DMP FIFO buffer  |
  * | MPU6050 DMP read fails   | Failed attempts to read from the MPU6050 DMP FIFO buffer  |
- * | Unknown command          | Number of unrecognized commands have been recieved. |
+ * | Unknown command          | Number of unrecognized commands have been received. |
  * | Left DRV8825 fault       | Number of fault signals sent by the left DVR8825 stepper motor driver |
  * | Right DRV8825 fault      | Number of fault signals sent by the right DVR8825 stepper motor driver |
 =================================================================================================== */
 void updateMetaData()
 {
+  runbit(17) ;
   String tmp = String(metadata.wifiConAttemptsCnt);
   tmp += "," + String(metadata.wifiDropCnt);
   tmp += "," + String(metadata.mqttConAttemptsCnt);
@@ -1257,6 +1339,7 @@ void updateMetaData()
 =================================================================================================== */
 void updateLeftOLEDNetInfo()
 {
+  runbit(18) ;
   leftOLED.clear();
   leftOLED.drawString(0, 0, String(myIPAddress));
   leftOLED.drawString(0, 16, String(myMACaddress));
@@ -1273,6 +1356,7 @@ void updateLeftOLEDNetInfo()
 =================================================================================================== */
 void updateRightOLED()
 {
+  runbit(19) ;
   rightOLED.clear();
   rightOLED.drawString(0, 0, String("Ang: ")+String(Balance.tilt));
   rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));
@@ -1289,6 +1373,7 @@ void updateRightOLED()
 =================================================================================================== */
 void updateLeftOLED(String stage)
 {
+  runbit(20) ;
   leftOLED.clear();
   leftOLED.drawString(0, 0, String("   Setup() Stage: "));
   leftOLED.drawString(0, 32, String("> ")+String(stage));
@@ -1301,6 +1386,7 @@ void updateLeftOLED(String stage)
 =================================================================================================== */
 void setupWiFi()
 {
+  runbit(21) ;
   scanNetworks();
   connectToNetwork();
 } // setupWiFi()
@@ -1312,6 +1398,7 @@ void setupWiFi()
 =================================================================================================== */
 void subscribed_callback(char *data, uint16_t len)
 {
+  runbit(22) ;
   // Print out topic name and message
   AMDP_PRINT("<subscribed_callback> Got this command: ");
   AMDP_PRINTLN(data);
@@ -1323,6 +1410,7 @@ void subscribed_callback(char *data, uint16_t len)
 =================================================================================================== */
 void setupMQTT()
 {
+  runbit(23) ;
   mqttClient.onConnect(onMqttConnect);
   mqttClient.onDisconnect(onMqttDisconnect);
   mqttClient.onSubscribe(onMqttSubscribe);
@@ -1522,6 +1610,7 @@ void cfgByMAC()
 =================================================================================================== */
 void updateLED()
 {
+  runbit(24) ;
   blinkState = !blinkState;
   digitalWrite(gp_SWC_LED, blinkState);
   goLED = millis() + tmrLED; // Reset LED flashing counter
@@ -1538,10 +1627,12 @@ boolean readIMU()
   if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) // Check to see if there is any data in the DMP FIFO buffer.
   { 
     telMilli2 = millis();                      // telemetry timestamp (gives get fifo info execution time))
+    tm_readFIFO = telMilli2 - telMilli1;       // telemetry measurement - time to read packet from dmp FIFO
     mpu.dmpGetQuaternion(&q, fifoBuffer);      // Get the latest packet of Quaternion data
     mpu.dmpGetGravity(&gravity, &q);           // Get the latest packet of gravity data, using quaternion data
     mpu.dmpGetYawPitchRoll(ypr, &q, &gravity); // Get the latest packet of YPR angles, using gravity data
-    telMilli3 = millis();                      // telemetry timestamp (gives Rowberg routine execution time))
+    telMilli3 = millis();                      // telemetry timestamp (gives Rowberg getDmp routines execution time))
+    tm_dmpGet = telMilli3 - telMilli2;         // telemetry measurement: time to execute the 3 mpu.dmpGet* routines
 
     Balance.tilt = ypr[2] * RAD_TO_DEG - 90. ; // get the Roll, relative to original IMU orientation & adjust
     if (Balance.tilt < -180.) Balance.tilt = 90.;     // avoid abrupt change from +90 to -270, when he's past a face plant
@@ -1563,6 +1654,7 @@ boolean readIMU()
 =================================================================================================== */
 void setupFreeRTOStimers()
 {
+  runbit(25) ;
   int const wifiTimerPeriod = 2000;                                    // Time in milliseconds between wifi timer events
   int const mqttTimerPeriod = 2000;                                    // Time in milliseconds between mqtt timer events
   mqttReconnectTimer = xTimerCreate("mqttTimer",                       // Human readable name assigned to timer
@@ -1590,6 +1682,7 @@ void setupFreeRTOStimers()
 =================================================================================================== */
 void setupDriverMotors()
 {
+  runbit(26) ;
   // Set up GPIO pins for the robot's right motor
   AMDP_PRINTLN("<setupDriverMotors> Initialize GPIO pins for right motor");
   pinMode(gp_DRV1_DIR, OUTPUT);   // Set left direction pin as output
@@ -1638,6 +1731,7 @@ void setupDriverMotors()
 =================================================================================================== */
 void checkBalanceState()
 {
+  runbit(27) ;
 // check to see if there's been a change in the balance state, and if so, handle the transition
   switch (Balance.state)
   {
@@ -1705,6 +1799,7 @@ void checkBalanceState()
 =================================================================================================== */
 void setRobotObjective(int objective)
 {
+  runbit(28) ;
   switch (objective)
   {
   case STATE_STAND_GROUND:
@@ -1770,9 +1865,13 @@ void loop()
   if (millis() >= goIMU)
   {
     goIMU = millis() + tmrIMU;            // Reset IMU update counter right away.
+    holdMilli1 = telMilli1;               // remember previous startime to calculate delta time for goIMU starts
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
+    tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
     boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
+    holdMilli4 = telMilli4;               // save previous timestamp for BalanceByAngle() calculation
     telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
+    tm_allReadIMU = telMilli4 - telMilli1; // telemetry measurement: total time for readIMU routine
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
       checkBalanceState();                // handle balance state changes: sleep, awake, active
@@ -1786,6 +1885,7 @@ void loop()
         if(Balance.method == bm_angle)
         { balanceByAngle();               // Do balancing calculation based on angle displacement from vertical
         telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
+        tm_OldbalByAng = telMilli5 - holdMilli4; // telemetry measurement: time in BalanceByAngle for PREVIOUS goIMU call
         }
       } // if(Balance.state...)
     }                               // if rCode
