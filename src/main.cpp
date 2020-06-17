@@ -9,60 +9,61 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
-  * 0.0.16  2020-06-15 DE: make OLED display optional, controlled by bool OLED_enable
-  *                     -fix calculation of OldBalByAng telemetry time interval
-  *                     -restructure loop() with else if's, so only one routine ever runs before next goIMU check
-  *                     -add execution time of left and right OLED updates to telemetry. Yup - they're huge.
-  *                     -move writing of netinfo to left eye into setup(), since info is static, and doesn't need refreshes
-  *                       -subsequently added it when entering bs_awake, to get all values to display
-  *                     -add execution time of updateMetadata() to telemetry
-  *                     -remove display of MotorInt and PID from right eye, to see what execution time reduction we get
-  *                     -add execution time for updateMetadata() to telemetry
-  *                     -play with adjusting pid_p_gain & watching telemetry
-  *                     -removed serial I/O from onMQTTpublish(), which runs at a high frequency
-  *                     -add pid_i_gain and pid_d_gain parameters for controlling PID algorithm
-  *                     -zero telemetry values after publication, so leftovers don't get published if routine doesn't run
-  *                     - in tm_MQpubCnt, count executions of onMQTTpublish() between balance telemetry publishes
-  *                     -fix telemetry titles for R.O.time & MQpubCnt (they were swapped)
-  * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
-  *                     - move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
-  *                     - remove Balance.state from balance telemetry - not useful
-  *                     - parameterize motor wheel direction differences between bots
-  *                     - add runFlags so telemetry can show what routines have run recently
-  *                     - recode balance telemetry to send calculated intervals rather than timestamps
-  * 0.0.14  2020-06-12 DE: reverse direction of wheels by multiplying motorInt by -1
-  *                    - add support for left OLED, and use it to display current setup() stage, and then network info
-  *                    - remove //de markers, except where code changes may be needed
-  *                     - move some (not all) balanceByAngle params and variables into structs
-  *                     - enhanced balance MQTT data, adding general purpose timestamps telMillis1 - 5
-  *                     - added MQTT data title publishing when balance state enters bs_active, ctntroled by balTelMsg.needTitles
-  *                     - adding MQTT publish of balance control params: pid gain, hi & lo speeds, smoother, tmrISU, once bot is bs_active
-  * 0.0.13  2020-06-02 DE: jump the Version number to sync up with master on Git
-  *                    - trim so source lines don't exceed 140 characters
-  *                    - rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
-  *                      standard of prefixing the prefix with "robot". 
-  *                    - add Balance.state to track what part of balancing process we're in, and checkBalanceState() called from loop()
-  *                    - add second balancing method, by angle, with control by Balance.method variable, and 2 part motor ISR's
-  *                       key new routine is balanceByAngle() called from loop()
-  *                    - add display of motor "speed" variable to OLED, and current PID value
-  *                    - add smoothing to motor speed changes
-  *                    - add fallback from balance state awake to sleep, then fix it
-  *                    - correct topic used for MQTT balance data in balanceByAngle()
-  * 0.0.8   2020-05-29 DE: update my bot's calibraton data and correct printout
-  *                    add three methods to calculate tile angle:
-  *                    1)non-DMP, using methods from 2 websites:
-  *                      https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/examples/MP
-  *                      https://hester.mtholyoke.edu/idesign/SensorTilt.html
-  *                    2)DMP, using one of the YPR values it provides, with a gimbal lock risk
-  *                    3)DMP, using quaternions to rotate original "up" vector (0,0,1)
-  *                    -add a visible separator line of equal signs before each routine definition
-  *                    -add another debug print command: AMDP_PRINTF(x,y)
-   *                   -left in the mpu.Calibrate... calls, although they're absent in Rowberg's lates
-   *                   -require the MPU6050 library with the fix on line 2764, by renaming it to MPU60
-   *                     MPU6050-6Axis_MotionApps_V6_12 as well, because it references MPU6050.h
-   *                   -reformat #includes to clarify which libraries we created ourselves, and make l
-   *                   -remove all support for DMP interrupts, which latest Rowberg code doesn't need
-   *                   -select DMP's YPR[2] as best tilt angle to use, in variable tilt, and trim code 
+ * 0.0.17  2020-06-17 AM: Added MQTT commands to set pid_p_gain, pid_i_gain, pid_d_gain and smoother remotely to help speed up PID tuning
+ * 0.0.16  2020-06-15 DE: make OLED display optional, controlled by bool OLED_enable
+ *                     -fix calculation of OldBalByAng telemetry time interval
+ *                     -restructure loop() with else if's, so only one routine ever runs before next goIMU check
+ *                     -add execution time of left and right OLED updates to telemetry. Yup - they're huge.
+ *                     -move writing of netinfo to left eye into setup(), since info is static, and doesn't need refreshes
+ *                       -subsequently added it when entering bs_awake, to get all values to display
+ *                     -add execution time of updateMetadata() to telemetry
+ *                     -remove display of MotorInt and PID from right eye, to see what execution time reduction we get
+ *                     -add execution time for updateMetadata() to telemetry
+ *                     -play with adjusting pid_p_gain & watching telemetry
+ *                     -removed serial I/O from onMQTTpublish(), which runs at a high frequency
+ *                     -add pid_i_gain and pid_d_gain parameters for controlling PID algorithm
+ *                     -zero telemetry values after publication, so leftovers don't get published if routine doesn't run
+ *                     - in tm_MQpubCnt, count executions of onMQTTpublish() between balance telemetry publishes
+ *                     -fix telemetry titles for R.O.time & MQpubCnt (they were swapped)
+ * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
+ *                     - move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
+ *                     - remove Balance.state from balance telemetry - not useful
+ *                     - parameterize motor wheel direction differences between bots
+ *                     - add runFlags so telemetry can show what routines have run recently
+ *                     - recode balance telemetry to send calculated intervals rather than timestamps
+ * 0.0.14  2020-06-12 DE: reverse direction of wheels by multiplying motorInt by -1
+ *                    - add support for left OLED, and use it to display current setup() stage, and then network info
+ *                    - remove //de markers, except where code changes may be needed
+ *                     - move some (not all) balanceByAngle params and variables into structs
+ *                     - enhanced balance MQTT data, adding general purpose timestamps telMillis1 - 5
+ *                     - added MQTT data title publishing when balance state enters bs_active, ctntroled by balTelMsg.needTitles
+ *                     - adding MQTT publish of balance control params: pid gain, hi & lo speeds, smoother, tmrISU, once bot is bs_active
+ * 0.0.13  2020-06-02 DE: jump the Version number to sync up with master on Git
+ *                    - trim so source lines don't exceed 140 characters
+ *                    - rename RobotBalance struct to Balance. Hmm, holding off on further changes like this since there seems to be a
+ *                      standard of prefixing the prefix with "robot". 
+ *                    - add Balance.state to track what part of balancing process we're in, and checkBalanceState() called from loop()
+ *                    - add second balancing method, by angle, with control by Balance.method variable, and 2 part motor ISR's
+ *                       key new routine is balanceByAngle() called from loop()
+ *                    - add display of motor "speed" variable to OLED, and current PID value
+ *                    - add smoothing to motor speed changes
+ *                    - add fallback from balance state awake to sleep, then fix it
+ *                    - correct topic used for MQTT balance data in balanceByAngle()
+ * 0.0.8   2020-05-29 DE: update my bot's calibraton data and correct printout
+ *                    add three methods to calculate tile angle:
+ *                    1)non-DMP, using methods from 2 websites:
+ *                      https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/examples/MP
+ *                      https://hester.mtholyoke.edu/idesign/SensorTilt.html
+ *                    2)DMP, using one of the YPR values it provides, with a gimbal lock risk
+ *                    3)DMP, using quaternions to rotate original "up" vector (0,0,1)
+ *                    -add a visible separator line of equal signs before each routine definition
+ *                    -add another debug print command: AMDP_PRINTF(x,y)
+ *                   -left in the mpu.Calibrate... calls, although they're absent in Rowberg's lates
+ *                   -require the MPU6050 library with the fix on line 2764, by renaming it to MPU60
+ *                     MPU6050-6Axis_MotionApps_V6_12 as well, because it references MPU6050.h
+ *                   -reformat #includes to clarify which libraries we created ourselves, and make l
+ *                   -remove all support for DMP interrupts, which latest Rowberg code doesn't need
+ *                   -select DMP's YPR[2] as best tilt angle to use, in variable tilt, and trim code 
  * 0.0.12  2020-06-01 AM: Corrected wheel diameter value. Moved min/max PWM data to new metadata structure. Removed all the 
  *                        portENTER_CRITICAL_ISR commands and associated portMUX_TYPE variabes as these are only used to protect 
  *                        FREERTOS threads which we do not use at the moment. We can use nointerrupt() and interrupt() instead if
@@ -875,6 +876,38 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   {
     AMDP_PRINTLN("<onMqttMessage> Publishing of metadata now OFF");
     metadataMsg.active = false;
+  } //elseif
+  else if(tmp.substring(0,10) == "pid_p_gain")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    pid_p_gain = firstValue.toFloat();
+    AMDP_PRINT("<onMqttMessage> Set pid_p_gain to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+  else if(tmp.substring(0,10) == "pid_i_gain")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    pid_i_gain = firstValue.toFloat();
+    AMDP_PRINT("<onMqttMessage> Set pid_i_gain to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+  else if(tmp.substring(0,10) == "pid_d_gain")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    pid_d_gain = firstValue.toFloat();
+    AMDP_PRINT("<onMqttMessage> Set pid_d_gain to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+  else if(tmp.substring(0,8) == "smoother")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    smoother = firstValue.toFloat();
+    AMDP_PRINT("<onMqttMessage> Set smoother to ");
+    AMDP_PRINTLN(firstValue);
   } //elseif
   else
   {
