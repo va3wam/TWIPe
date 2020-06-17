@@ -2,13 +2,27 @@
  * @file main.cpp
  * @author va3wam
  * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.13
+ * @version 0.0.16
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+  * 0.0.16  2020-06-15 DE: make OLED display optional, controlled by bool OLED_enable
+  *                     -fix calculation of OldBalByAng telemetry time interval
+  *                     -restructure loop() with else if's, so only one routine ever runs before next goIMU check
+  *                     -add execution time of left and right OLED updates to telemetry. Yup - they're huge.
+  *                     -move writing of netinfo to left eye into setup(), since info is static, and doesn't need refreshes
+  *                       -subsequently added it when entering bs_awake, to get all values to display
+  *                     -add execution time of updateMetadata() to telemetry
+  *                     -remove display of MotorInt and PID from right eye, to see what execution time reduction we get
+  *                     -add execution time for updateMetadata() to telemetry
+  *                     -play with adjusting pid_p_gain & watching telemetry
+  *                     -removed serial I/O from onMQTTpublish(), which runs at a high frequency
+  *                     -add pid_i_gain and pid_d_gain parameters for controlling PID algorithm
+  *                     -zero telemetry values after publication, so leftovers don't get published if routine doesn't run
+  *                     - in tm_MQpubCnt, count executions of onMQTTpublish() between balance telemetry publishes
   * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
   *                     - move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
   *                     - remove Balance.state from balance telemetry - not useful
@@ -170,6 +184,7 @@ static volatile state robotState;         // Object of states the robot is in pu
 // Define OLED constants, classes and global variables
 SSD1306 rightOLED(rightOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);
 SSD1306 leftOLED(leftOLED_I2C_ADD, gp_I2C_LCD_SDA, gp_I2C_LCD_SCL);  // same I2C bus, but different address
+bool OLED_enable = true;                  // allow disabling OLED for performance troubleshooting
 
 // Define LED constants, classes and global variables
 bool blinkState = false;
@@ -277,54 +292,64 @@ unsigned long tm_readFIFO;        // telemetry value: how long the mpu.dmpGetCur
 unsigned long tm_dmpGet;          // telemetry value: how long the dmpGet* calls after above call took
 unsigned long tm_allReadIMU;      // telemetry value: how long the readIMU execution took
 unsigned long tm_OldbalByAng;     // telemetry value: how long the PREVIOUS balanceByAngle took
+unsigned long tm_ROLEDtime;       // telemetry measure: time spent in right OLED update
+unsigned long tm_LOLEDtime;       // telemetry measure: time spent in left OLED update 
+unsigned long tm_uMDtime;         // telemetry measure: time spent in updateMetadata()
+int tm_MQpubCnt = 0;              // telemetry measure: count of onMQTTpublish() executions
 
 unsigned long runFlagWord;        // telemetry word with bit coded flags indicating if a routine has run since last telemetry
                                   // the indicated routine has runbit(n); at its beginning, where n is it's bit number, 0 - 31
                                   // the runFlagWord is cleared after each balance telemetry publish
                                   
 #define runbit(x)   runFlagWord  |= 1 << x;
-
-// runbit(0)   1  IRAM_ATTR leftDRV8825fault
-// runbit(1)   1  IRAM_ATTR rightDRV8825fault
-// runbit(2)   1  connectToWifi
-// runbit(3)___1  connectToMqtt
-// runbit(4)   1  WiFiEvent
-// runbit(5)   1  processWifiEvent
-// runbit(6)   1  onMqttConnect
-// runbit(7)___1  onMqttDisconnect
-// runbit(8)   1  onMqttSubscribe
-// runbit(9)   1  onMqttUnsubscribe
-// runbit(10)   1  onMqttMessage
-// runbit(11)___1  onMqttPublish
-//              0  connectToNetwork
-//              0  scanNetworks
-//              0  printBinary
-// runbit(12)   1  publishMQTT
-// runbit(13)   1  stepMotor
-// runbit(14)   1  IRAM_ATTR rightMotorTimerISR
-// runbit(15)___1  IRAM_ATTR leftMotorTimerISR
-// runbit(16)   1  calcBalanceParmeters
-//              0  balanceByAngle
-// runbit(17)   1  updateMetaData
-// runbit(18)   1  updateLeftOLEDNetInfo
-// runbit(19)___1  updateRightOLED
-// runbit(20)   1  updateLeftOLED
-// runbit(21)   1  setupWiFi
-// runbit(22)   1  subscribed_callback
-// runbit(23)___1  setupMQTT
-//              0  setupLED
-//              0  setupOLEDupdate LED
-//              0  setupIMU
-//              0  cfgByMAC
-// runbit(24)   1  updateLED
-// runbit(25)   1  setupFreeRTOStimers
-// runbit(26)   1  setupDriverMotors
-// runbit(27)___1  checkBalanceState
-// runbit(28)   1  setRobotObjective
-//              0  setup
-//              0  loop
-
-
+//             NOTES  (see below)
+//             -----
+// runbit(0)    1     IRAM_ATTR leftDRV8825fault
+// runbit(1)    1     IRAM_ATTR rightDRV8825fault
+// runbit(2)    1  T  connectToWifi
+// runbit(3)___ 1  T  connectToMqtt
+// runbit(4)    1  W  WiFiEvent
+// runbit(5)    1     processWifiEvent
+// runbit(6)    1  M  onMqttConnect
+// runbit(7)___ 1  M  onMqttDisconnect
+// runbit(8)    1  M  onMqttSubscribe
+// runbit(9)    1  M  onMqttUnsubscribe
+// runbit(10)   1  M  onMqttMessage
+// runbit(11)___1  M  onMqttPublish
+//              0     connectToNetwork
+//              0     scanNetworks
+//              0     printBinary
+// runbit(12)   1     publishMQTT
+// runbit(13)   1     stepMotor
+// runbit(14)   1     IRAM_ATTR rightMotorTimerISR
+// runbit(15)___1     IRAM_ATTR leftMotorTimerISR
+// runbit(16)   1     calcBalanceParmeters
+//              0     balanceByAngle
+// runbit(17)   1     updateMetaData
+// runbit(18)   1     updateLeftOLEDNetInfo
+// runbit(19)___1     updateRightOLED
+// runbit(20)   1     updateLeftOLED
+// runbit(21)   1  S  setupWiFi
+// runbit(22)   1     subscribed_callback
+// runbit(23)___1  S  setupMQTT
+//              0     setupLED
+//              0     setupOLED
+//              0     setupIMU
+//              0     cfgByMAC
+// runbit(24)   1     updateLED
+// runbit(25)   1  S  setupFreeRTOStimers
+// runbit(26)   1  S  setupDriverMotors
+// runbit(27)___1     checkBalanceState
+// runbit(28)   1  S  setRobotObjective
+//              0     setup
+//              0     loop
+//
+// NOTES:
+//  0  excluded - doesn't have associated runbit in runFlagword
+//  1  included - routine has a call to runbit(n) at its beginning
+//  T  timer task - task is initiated by an RTOS timer, and runs asynchronous to loop()
+//  W  WiFi Event - task is initiated by WiFi activity, and runs asynchronous to loop()
+//  S  Startup only - task runs within startup() only, and doesn't need runbit tracking
 
 #define TARGET_CONSOLE 0
 #define TARGET_MQTT 1
@@ -371,11 +396,13 @@ volatile int throttle_Llimit, throttle_Rlimit;            // limit that determin
 volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
 float pid;                                                  // global so updateOLED() can find it
 
-float pid_p_gain = 20;       //de multiplier for the P part of PID
+float pid_p_gain = 50;       //de multiplier for the P part of PID
+float pid_i_gain = 0;        //de multiplier for the I part of PID
+float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
 int bot_slow =600;           //de  need to fit these into structures, but quick & dirty now
 int bot_fast = 300;
-float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
+float smoother = .5 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
 int lastSpeed = 0;           // memory for above method using smoother
 
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
@@ -862,9 +889,10 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 void onMqttPublish(uint16_t packetId)
 {
   runbit(11) ;
-  AMDP_PRINTLN("Publish acknowledged.");
-  AMDP_PRINT("  packetId: ");
-  AMDP_PRINTLN(packetId);
+  tm_MQpubCnt ++ ;         // count the number of times this routines executes between balance telemetry
+//  AMDP_PRINTLN("Publish acknowledged.");
+//  AMDP_PRINT("  packetId: ");
+//  AMDP_PRINTLN(packetId);
 } //onMqttPublish()
 
 /**
@@ -1261,8 +1289,18 @@ void balanceByAngle()
 
   String tmp = String(tm_IMUdelta) +"," + String(tm_readFIFO) + "," + String(tm_dmpGet) + "," + String(tm_allReadIMU) + "," 
    + String(tm_OldbalByAng) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt)
-   + "," + flagsInHex;
-  if (baltelMsg.active) // If configured to write balance telemetry data
+   + "," + flagsInHex +","+ String(tm_ROLEDtime) +","+ String(tm_MQpubCnt) +","+ String(tm_uMDtime);
+   tm_ROLEDtime = 0;                  // don't leave old time hanging around in case routine doesn't run soon.
+   tm_LOLEDtime = 0;
+   tm_uMDtime = 0;
+   tm_IMUdelta = 0;
+   tm_readFIFO = 0;
+   tm_dmpGet = 0;
+   tm_allReadIMU = 0;
+   tm_MQpubCnt = 0;
+   
+  
+   if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
     {
@@ -1273,12 +1311,14 @@ void balanceByAngle()
     {
       if( baltelMsg.needTitles == true)         // do we need to publish MQTT column titles?
       { baltelMsg.needTitles = false;           // yes, but only send titles once per active state entry
+        // publish the control parameters for this active session, with titles, then titles for the data points
+        // data points are published right after that
 
-        publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");
+        publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");  // control param titles, to be followed by their values
         publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
-        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags");
+        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,MQpubCnt,L.O.time,uMDtime");
       }
-      publishMQTT("balance", tmp);
+      publishMQTT("balance", tmp);              // publish data point string built above.
     } //else
   }   //if
 } // balanceByAngle
@@ -1308,6 +1348,7 @@ void balanceByAngle()
 void updateMetaData()
 {
   runbit(17) ;
+  telMilli5 = millis();             // timestamp to get execution time for telemetry
   String tmp = String(metadata.wifiConAttemptsCnt);
   tmp += "," + String(metadata.wifiDropCnt);
   tmp += "," + String(metadata.mqttConAttemptsCnt);
@@ -1330,6 +1371,7 @@ void updateMetaData()
     }                                  //else
   }                                    //if
   goMETADATA = millis() + tmrMETADATA; // Reset SERIAL update target time
+  tm_uMDtime = millis() - telMilli5;   // telemetry measure: time spent in updateMetadata()
 } // updateMetaData()
 
 /**
@@ -1339,13 +1381,16 @@ void updateMetaData()
 =================================================================================================== */
 void updateLeftOLEDNetInfo()
 {
-  runbit(18) ;
-  leftOLED.clear();
-  leftOLED.drawString(0, 0, String(myIPAddress));
-  leftOLED.drawString(0, 16, String(myMACaddress));
-  leftOLED.drawString(0, 32, String(myAccessPoint));
-  leftOLED.drawString(0, 48, String(myHostName));
-  leftOLED.display();
+  if(OLED_enable)
+  {
+    runbit(18) ;
+    leftOLED.clear();
+    leftOLED.drawString(0, 0, String(myIPAddress));
+    leftOLED.drawString(0, 16, String(myMACaddress));
+    leftOLED.drawString(0, 32, String(myAccessPoint));
+    leftOLED.drawString(0, 48, String(myHostName));
+    leftOLED.display();
+  }
 } //UpdateLeftOLEDNetInfo()
 
 /**
@@ -1356,14 +1401,22 @@ void updateLeftOLEDNetInfo()
 =================================================================================================== */
 void updateRightOLED()
 {
-  runbit(19) ;
-  rightOLED.clear();
-  rightOLED.drawString(0, 0, String("Ang: ")+String(Balance.tilt));
-  rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));
-  rightOLED.drawString(0, 32, String("PID: ")+String(pid));
-  rightOLED.display();
-  updateLeftOLEDNetInfo();    // put MAC, IP, AccessPoint and Hostname onto left OLED
-  goOLED = millis() + tmrOLED; // Reset OLED update target time
+  if(OLED_enable)
+  {
+    telMilli4 = millis();         // timestamp for start of this routine
+    runbit(19) ;
+    rightOLED.clear();
+    rightOLED.drawString(0, 0, String("Ang: ")+String(Balance.tilt));
+//    rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));    // take this out to see impact on goIMU timing
+//    rightOLED.drawString(0, 32, String("PID: ")+String(pid));
+    rightOLED.display();
+    telMilli5 = millis();                  // timestamp between L & R OLED updates
+    tm_ROLEDtime = telMilli5 - telMilli4; // telemetry measure - time spent in updateRightOLED
+//  following routine is called once, from setup(), since the info doesn't change!
+//    updateLeftOLEDNetInfo();              // put MAC, IP, AccessPoint and Hostname onto left OLED
+    tm_LOLEDtime = millis() - telMilli5;  // telemetry measure - time spent in updateLeftOLED
+    goOLED = millis() + tmrOLED;          // Reset OLED update target time
+  }
 } //UpdateRightOLED()
 
 /**
@@ -1747,6 +1800,8 @@ void checkBalanceState()
         }  //if
         Balance.state = bs_awake;       // we're now waiting to hit almost vertical before going active
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
+        // update left eye with network info that is now available and static
+        updateLeftOLEDNetInfo();        // put IP, MAC, Accesspoint & MQTT hostname into left eye.
       }    // if (abs(Balance.tilt)
 
       else // otherwise robot has such a big tilt that it should not be trying to balance
@@ -1851,6 +1906,7 @@ void setup()
   goIMU = millis() + tmrIMU;           // Reset IMU update counter
   goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
   cntLoop = 0;                         // Reset counter that tracks how many iterations of loop() have occurred
+  updateLeftOLEDNetInfo();             // output network info once since it's stable, not repeatedly
   Serial.println(F("<setup> End of setup"));
 } //setup()
 
@@ -1860,10 +1916,9 @@ void setup()
 void loop()
 {
   cntLoop++; // Increment loop() counter
-  if (WifiLastEvent != -1)
-    processWifiEvent();                   // if there's a pending Wifi event, handle it
-  if (millis() >= goIMU)
-  {
+
+  if (millis() >= goIMU)                  // use "else if" to only allow one routine to run per loop()...
+  {                                       // which increases frequency of checks for goIMU readiness
     goIMU = millis() + tmrIMU;            // Reset IMU update counter right away.
     holdMilli1 = telMilli1;               // remember previous startime to calculate delta time for goIMU starts
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
@@ -1883,17 +1938,20 @@ void loop()
           calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
         } // if(Balance.method)
         if(Balance.method == bm_angle)
-        { balanceByAngle();               // Do balancing calculation based on angle displacement from vertical
+        { balanceByAngle();               // Do balancing calc's based on angle displacement from vertical, 
+                                          // and publish telemetry, resetting runFlagword
         telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
-        tm_OldbalByAng = telMilli5 - holdMilli4; // telemetry measurement: time in BalanceByAngle for PREVIOUS goIMU call
+        tm_OldbalByAng = telMilli5 - telMilli4; // telemetry measurement: time in BalanceByAngle, reported in NEXT MQTT publish
         }
       } // if(Balance.state...)
     }                               // if rCode
   }                                 // if millis() > goIMU
-  if (millis() >= goOLED)
-    updateRightOLED();                   // replace contents of right OLED display
-  if (millis() >= goLED)
-    updateLED(); // Update the OLED with data
-  if (millis() >= goMETADATA)
-    updateMetaData(); // Send data to serial terminal
+  else if (WifiLastEvent != -1)
+    processWifiEvent();                   // if there's a pending Wifi event, handle it
+  else if (millis() >= goOLED)
+    updateRightOLED();              // replace contents of both OLED displays
+  else if (millis() >= goLED)
+    updateLED();                    // Update the OLED with data
+  else if (millis() >= goMETADATA)
+    updateMetaData();               // Send data to serial terminal
 } //loop()
