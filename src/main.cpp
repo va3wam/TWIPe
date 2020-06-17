@@ -20,6 +20,9 @@
   *                     -add execution time for updateMetadata() to telemetry
   *                     -play with adjusting pid_p_gain & watching telemetry
   *                     -removed serial I/O from onMQTTpublish(), which runs at a high frequency
+  *                     -add pid_i_gain and pid_d_gain parameters for controlling PID algorithm
+  *                     -zero telemetry values after publication, so leftovers don't get published if routine doesn't run
+  *                     - in tm_MQpubCnt, count executions of onMQTTpublish() between balance telemetry publishes
   * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
   *                     - move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
   *                     - remove Balance.state from balance telemetry - not useful
@@ -292,6 +295,7 @@ unsigned long tm_OldbalByAng;     // telemetry value: how long the PREVIOUS bala
 unsigned long tm_ROLEDtime;       // telemetry measure: time spent in right OLED update
 unsigned long tm_LOLEDtime;       // telemetry measure: time spent in left OLED update 
 unsigned long tm_uMDtime;         // telemetry measure: time spent in updateMetadata()
+int tm_MQpubCnt = 0;              // telemetry measure: count of onMQTTpublish() executions
 
 unsigned long runFlagWord;        // telemetry word with bit coded flags indicating if a routine has run since last telemetry
                                   // the indicated routine has runbit(n); at its beginning, where n is it's bit number, 0 - 31
@@ -393,6 +397,8 @@ volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit cal
 float pid;                                                  // global so updateOLED() can find it
 
 float pid_p_gain = 50;       //de multiplier for the P part of PID
+float pid_i_gain = 0;        //de multiplier for the I part of PID
+float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
 int bot_slow =600;           //de  need to fit these into structures, but quick & dirty now
 int bot_fast = 300;
@@ -883,6 +889,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 void onMqttPublish(uint16_t packetId)
 {
   runbit(11) ;
+  tm_MQpubCnt ++ ;         // count the number of times this routines executes between balance telemetry
 //  AMDP_PRINTLN("Publish acknowledged.");
 //  AMDP_PRINT("  packetId: ");
 //  AMDP_PRINTLN(packetId);
@@ -1282,10 +1289,16 @@ void balanceByAngle()
 
   String tmp = String(tm_IMUdelta) +"," + String(tm_readFIFO) + "," + String(tm_dmpGet) + "," + String(tm_allReadIMU) + "," 
    + String(tm_OldbalByAng) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt)
-   + "," + flagsInHex +","+ String(tm_ROLEDtime) +","+ String(tm_LOLEDtime) +","+ String(tm_uMDtime);
+   + "," + flagsInHex +","+ String(tm_ROLEDtime) +","+ String(tm_MQpubCnt) +","+ String(tm_uMDtime);
    tm_ROLEDtime = 0;                  // don't leave old time hanging around in case routine doesn't run soon.
    tm_LOLEDtime = 0;
    tm_uMDtime = 0;
+   tm_IMUdelta = 0;
+   tm_readFIFO = 0;
+   tm_dmpGet = 0;
+   tm_allReadIMU = 0;
+   tm_MQpubCnt = 0;
+   
   
    if (baltelMsg.active) // If configured to write balance telemetry data
   {
@@ -1303,7 +1316,7 @@ void balanceByAngle()
 
         publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");  // control param titles, to be followed by their values
         publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
-        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,L.O.time,uMDtime");
+        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,MQpubCnt,L.O.time,uMDtime");
       }
       publishMQTT("balance", tmp);              // publish data point string built above.
     } //else
