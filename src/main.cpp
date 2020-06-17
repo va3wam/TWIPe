@@ -23,6 +23,7 @@
   *                     -add pid_i_gain and pid_d_gain parameters for controlling PID algorithm
   *                     -zero telemetry values after publication, so leftovers don't get published if routine doesn't run
   *                     - in tm_MQpubCnt, count executions of onMQTTpublish() between balance telemetry publishes
+  *                     -fix telemetry titles for R.O.time & MQpubCnt (they were swapped)
   * 0.0.15  2020-06-13 DE: increase angle reaction time by reducing tmrIMU to 20 milliseconds
   *                     - move tmrIMU reset to loop(), rather than at end of readIMU for more accuracy
   *                     - remove Balance.state from balance telemetry - not useful
@@ -1316,7 +1317,7 @@ void balanceByAngle()
 
         publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");  // control param titles, to be followed by their values
         publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
-        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,MQpubCnt,L.O.time,uMDtime");
+        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
       }
       publishMQTT("balance", tmp);              // publish data point string built above.
     } //else
