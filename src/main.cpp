@@ -9,6 +9,12 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.18  2020-06-17 DE: add MQTT command targetAngle=f   where float f is a number of degrees. -1 is one degree back of vertical
+ *                      -add telemetry support for pid_i_gain, pid_d_gain, targetAngle
+ *                      -move telemetry for control params & data titles from bs.active state to bs.awake, before we get busy
+ *                      -added MQTT remote control of motor speed controls with commands motor_int_slow=n and motor_int_fast=n
+ *                      -added MQTT command to set angle when balancing starts, around 2 degrees.  active_angle=<float>
+ *                        -new remotely controllable parameters are supported in spreadsheet version 10
  * 0.0.17  2020-06-17 AM: Added MQTT commands to set pid_p_gain, pid_i_gain, pid_d_gain and smoother remotely to help speed up PID tuning
  * 0.0.16  2020-06-15 DE: make OLED display optional, controlled by bool OLED_enable
  *                     -fix calculation of OldBalByAng telemetry time interval
@@ -404,7 +410,7 @@ float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
 int bot_slow =600;           //de  need to fit these into structures, but quick & dirty now
 int bot_fast = 300;
-float smoother = .5 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
+float smoother = .5 ;        // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
 int lastSpeed = 0;           // memory for above method using smoother
 
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
@@ -603,7 +609,6 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
   runbit(5) ;
   int event = WifiLastEvent; // retrieve last event that occurred
   WifiLastEvent = -1;        // and say that we've processed it
-//  String tmpHostNameVar;     // Hold WiFi host name created in this function
   AMDP_PRINT("<processWiFiEvent> event:");
   AMDP_PRINTLN(event);
   switch (event)
@@ -812,7 +817,15 @@ void onMqttUnsubscribe(uint16_t packetId)
  * | metadataON             | Causes metadata to be published to the MQTT broker topic {robot name}/metadata |  
  * | metadataOFF            | Causes metadata to stop being published to the MQTT broker |  
  * | metadataCON            | Causes metadata to be published to the local console |
- * | metadataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance |  
+ * | metadataMQTT           | Causes metadata to be published to the MQTT broker topic {robot name}/telemetry/balance | 
+ * | pid_p_gain=<float>     | sets the gain for the P part of PID balancing to the specified floating point number
+ * | pid_i_gain=<float>     | sets the gain for the I part of PID balancing to the specified floating point number
+ * | pid_d_gain=<float>     | sets the gain for the D part of PID balancing to the specified floating point number
+ * | smoother=<float>       | sets the control value for the motor speed smoothing method to <float>. zero disables smoothing
+ * | target_angle=<float>   | sets the target angle in degrees to <float>. Usually within a few degrees of zero
+ * | motor_int_slow=<Int>   | sets bot_slow to the given integer. Bigger number is lower bottom speed
+ * | motor_int_fast=<Int>   | sets bot_fast to the given integer. Smaller number is faster top speed
+ * | active_angle=<float>   | sets angle when bot enters bs_active and starts balancing. usually around 1 - 2 degrees
 =================================================================================================== */
 void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
 {
@@ -907,6 +920,38 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
     String firstValue = tmp.substring(equalIndex+1,len);
     smoother = firstValue.toFloat();
     AMDP_PRINT("<onMqttMessage> Set smoother to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+   else if(tmp.substring(0,12) == "target_angle")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    robotState.targetAngleDegrees = firstValue.toFloat();
+    AMDP_PRINT("<onMqttMessage> Set robotState.targetAngleDegrees to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+   else if(tmp.substring(0,14) == "motor_int_slow")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    bot_slow = firstValue.toInt();
+    AMDP_PRINT("<onMqttMessage> Set bot_slow to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+   else if(tmp.substring(0,14) == "motor_int_fast")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    bot_fast = firstValue.toInt();
+    AMDP_PRINT("<onMqttMessage> Set bot_fast to ");
+    AMDP_PRINTLN(firstValue);
+  } //elseif
+   else if(tmp.substring(0,12) == "active_angle")
+  {
+    int equalIndex = tmp.indexOf('=');
+    String firstValue = tmp.substring(equalIndex+1,len);
+    Balance.activeAngle = abs(firstValue.toFloat());
+    AMDP_PRINT("<onMqttMessage> Set bot_fast to ");
     AMDP_PRINTLN(firstValue);
   } //elseif
   else
@@ -1322,8 +1367,9 @@ void balanceByAngle()
   runFlagWord = 0 ;                   // clear flags ASAP, so new routines are seen
 
   String tmp = String(tm_IMUdelta) +"," + String(tm_readFIFO) + "," + String(tm_dmpGet) + "," + String(tm_allReadIMU) + "," 
-   + String(tm_OldbalByAng) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt)
-   + "," + flagsInHex +","+ String(tm_ROLEDtime) +","+ String(tm_MQpubCnt) +","+ String(tm_uMDtime);
+   + String(tm_OldbalByAng) + "," + String(Balance.tilt) + "," + String(pid) + "," + String(motorInt) + "," + flagsInHex
+   +","+ String(tm_ROLEDtime) +","+ String(tm_MQpubCnt) +","+ String(tm_uMDtime);
+
    tm_ROLEDtime = 0;                  // don't leave old time hanging around in case routine doesn't run soon.
    tm_LOLEDtime = 0;
    tm_uMDtime = 0;
@@ -1332,8 +1378,7 @@ void balanceByAngle()
    tm_dmpGet = 0;
    tm_allReadIMU = 0;
    tm_MQpubCnt = 0;
-   
-  
+
    if (baltelMsg.active) // If configured to write balance telemetry data
   {
     if (baltelMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
@@ -1343,15 +1388,6 @@ void balanceByAngle()
     }    //if
     else // Otherwise assume we are to send the data to the MQTT broker
     {
-      if( baltelMsg.needTitles == true)         // do we need to publish MQTT column titles?
-      { baltelMsg.needTitles = false;           // yes, but only send titles once per active state entry
-        // publish the control parameters for this active session, with titles, then titles for the data points
-        // data points are published right after that
-
-        publishMQTT("balance","p-gain,spd-lo,spd-hi,smooth,tmrIMU");  // control param titles, to be followed by their values
-        publishMQTT("balance",String(pid_p_gain) +","+ String(bot_slow) +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU));
-        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
-      }
       publishMQTT("balance", tmp);              // publish data point string built above.
     } //else
   }   //if
@@ -1383,17 +1419,18 @@ void updateMetaData()
 {
   runbit(17) ;
   telMilli5 = millis();             // timestamp to get execution time for telemetry
-  String tmp = String(metadata.wifiConAttemptsCnt);
-  tmp += "," + String(metadata.wifiDropCnt);
-  tmp += "," + String(metadata.mqttConAttemptsCnt);
-  tmp += "," + String(metadata.mqttDropCnt);
-  tmp += "," + String(metadata.dmpFifoDataPresentCnt);
-  tmp += "," + String(metadata.dmpFifoDataMissingCnt);
-  tmp += "," + String(metadata.unknownCmdCnt);
-  tmp += "," + String(metadata.leftDRVfault);
-  tmp += "," + String(metadata.rightDRVfault);
   if (metadataMsg.active) // If configured to write metadata
   {
+    String tmp = String(metadata.wifiConAttemptsCnt)
+      + "," + String(metadata.wifiDropCnt)
+      + "," + String(metadata.mqttConAttemptsCnt)
+      + "," + String(metadata.mqttDropCnt)
+      + "," + String(metadata.dmpFifoDataPresentCnt)
+      + "," + String(metadata.dmpFifoDataMissingCnt)
+      + "," + String(metadata.unknownCmdCnt)
+      + "," + String(metadata.leftDRVfault)
+      + "," + String(metadata.rightDRVfault);
+
     if (metadataMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
     {
       AMDP_PRINT("<updateMetaData> ");
@@ -1855,10 +1892,24 @@ void checkBalanceState()
     { if(abs(Balance.tilt) <= Balance.activeAngle)      // are we almost vertical?
       { Balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
-        baltelMsg.needTitles =  true;           // before next MQTT balance message, output msg showing column definitions
+        
+        // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
+
+        // first, publish the column titles for the control parameters
+        publishMQTT("balance","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
+
+        // then the values for the control parameters
+        publishMQTT("balance",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
+         +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
+         +","+ String(Balance.activeAngle));
+
+        // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
+        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
+
+        // the actual data points are published in balanceByAngle()
       }
       if(abs(Balance.tilt > Balance.maxAngleMotorActiveDegrees))    // if we're more than 30 degress from vertical...
-      { Balance.state = bs_sleep;
+      { Balance.state = bs_sleep;                                   // fall back to sleep
         AMDP_PRINTLN("<checkBalanceState> falling back to bs_sleep state");
       }
     break;
@@ -1980,12 +2031,16 @@ void loop()
       } // if(Balance.state...)
     }                               // if rCode
   }                                 // if millis() > goIMU
-  else if (WifiLastEvent != -1)
-    processWifiEvent();                   // if there's a pending Wifi event, handle it
-  else if (millis() >= goOLED)
-    updateRightOLED();              // replace contents of both OLED displays
-  else if (millis() >= goLED)
-    updateLED();                    // Update the OLED with data
-  else if (millis() >= goMETADATA)
-    updateMetaData();               // Send data to serial terminal
+  else 
+  {  if (WifiLastEvent != -1) {processWifiEvent(); }               // if there's a pending Wifi event, handle it
+     else
+     {  if (millis() >= goOLED) {updateRightOLED(); }              // replace contents of both OLED displays
+        else 
+        {  if (millis() >= goLED) {updateLED(); }                  // Update the OLED with data
+           else 
+           {  if (millis() >= goMETADATA) {updateMetaData(); }     // Send data to serial terminal
+           }
+        }
+     }
+  }
 } //loop()
