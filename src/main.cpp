@@ -14,6 +14,7 @@
  *                      -move telemetry for control params & data titles from bs.active state to bs.awake, before we get busy
  *                      -added MQTT remote control of motor speed controls with commands motor_int_slow=n and motor_int_fast=n
  *                      -added MQTT command to set angle when balancing starts, around 2 degrees.  active_angle=<float>
+ *                        -new remotely controllable parameters are supported in spreadsheet version 10
  * 0.0.17  2020-06-17 AM: Added MQTT commands to set pid_p_gain, pid_i_gain, pid_d_gain and smoother remotely to help speed up PID tuning
  * 0.0.16  2020-06-15 DE: make OLED display optional, controlled by bool OLED_enable
  *                     -fix calculation of OldBalByAng telemetry time interval
