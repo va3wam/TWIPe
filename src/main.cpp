@@ -1,14 +1,21 @@
 /*************************************************************************************************************************************
  * @file main.cpp
  * @author va3wam
- * @brief Run tests to determine the fastest times we can use on TWIPe for OLED and MQTT updates of data
- * @version 0.0.16
+ * @brief TWIPe robot firmware 
+ * @details Handles balancing the robot by reading MPU6050 IMU data, using PID to control a pair of open loop bi-polar stepper motors 
+ *          via DRV8826 motor drivers, and communicating data and recieving commands through the WiFi interface using the MQTT 
+ *          protocol via an MQTT broker running on a raspberry Pi 
+ * @version 0.0.20
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.20  2020-06-19 AM: Moved control parameter MQTT messages to their own MQTT topic. Also moved headings for balance and  control
+ *                        parameters to their own MQTT topic. Ths will make things friendly to MQTT remote clients while maintaining
+ *                        the spreadsheet process we are already using. Also corrected brief text for this code to more accurately 
+ *                        reflect what this code is along with a details tag that offers greatewer details on how this code works  
  * 0.0.19  2020-06-18 DE: bug fix to motor speed change smoothing code
  *                      -make wheels respond to change in direction more quickly by aborting current step thats in the wrong direction
  *                      -take "Ang: " label out of right OLED display
@@ -242,20 +249,25 @@ char const* wifiEv[]               // WiFi event number translations
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
 // Note sends balance telemetry data to <device name><telemetry/balance>
 // Note listens for commands on <device name><commands>
-const char* MQTT_BROKER_IP = "not-assigned";   // Need to make this a fixed IP address
-#define MQTT_BROKER_PORT 1883             // Use 8883 for SSL
-#define MQTT_USERNAME "NULL"              // Not used at this time. To do: secure MQTT broker
-#define MQTT_KEY "NULL"                   // Not used at this time. To do: secure MQTT broker
-#define MQTT_IN_CMD "/commands"           // Topic branch for incoming remote commands
+const char* MQTT_BROKER_IP = "not-assigned"; // Need to make this a fixed IP address
+#define MQTT_BROKER_PORT 1883 // Use 8883 for SSL
+#define MQTT_USERNAME "NULL" // Not used at this time. To do: secure MQTT broker
+#define MQTT_KEY "NULL" // Not used at this time. To do: secure MQTT broker
+#define MQTT_IN_CMD "/commands" // Topic branch for incoming remote commands
+#define MQTT_TEL_BAL_HEAD "/telemetry/balanceHeadings" // Topic tree for outgoing balance telemetry heading data
 #define MQTT_TEL_BAL "/telemetry/balance" // Topic tree for outgoing balance telemetry data
-#define MQTT_METADATA "/metadata"         // Topic tree for outgoing metadata about the robot
-#define QOS1 1                            // Quality of service level 1 ensures one time delivery
+#define MQTT_METADATA "/metadata" // Topic tree for outgoing metadata about the robot
+#define MQTT_CNTL_PARM_HEAD "/controlHeadings" // Topic tree for outgoing metadata about the robot
+#define MQTT_CNTL_PARM "/controlParameters" // Topic tree for outgoing metadata about the robot
+#define QOS1 1 // Quality of service level 1 ensures one time delivery
 AsyncMqttClient mqttClient;
 TimerHandle_t mqttReconnectTimer;
 String cmdTopicMQTT = "NOTHING"; // Full path to incoming command topic from MQTT broker
+String balTopicHeadingMQTT = "NOTHING"; // Full path to outgoing balance heading topic to MQTT broker
 String balTopicMQTT = "NOTHING"; // Full path to outgoing balance telemetry topic to MQTT broker
 String metTopicMQTT = "NOTHING"; // Full path to outgoing metadata topic to MQTT broker
-
+String cntlParmHeadingMQTT = "NOTHING"; // Full path to outgoing control parameter heading topic to MQTT broker
+String cntlParmMQTT = "NOTHING"; // Full path to outgoing control parameter topic to MQTT broker
 
 // Define global motor control variables and structures. Also define pointers and muxing for multitasking motors via ISRs
 #define motorISRus 20               // Number of microseconds between motor ISR calls
@@ -657,14 +669,24 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     wifi_connected = true;
     AMDP_PRINTLN("<processWiFiEvent> Use MAC address to create MQTT topic trees...");
     cmdTopicMQTT = myHostName + MQTT_IN_CMD;   // Define variable with the full name of the incoming command topic
+    balTopicHeadingMQTT = myHostName + MQTT_TEL_BAL_HEAD; // Define variabe with the full name of the outgoing balance telemetry heading topic
     balTopicMQTT = myHostName + MQTT_TEL_BAL;  // Define variabe with the full name of the outgoing balance telemetry topic
     metTopicMQTT = myHostName + MQTT_METADATA; // Define variable with full name of the outgoiong metadata topic
+    cntlParmHeadingMQTT = myHostName + MQTT_CNTL_PARM_HEAD;  // Define variabe with the full name of the outgoing balance telemetry topic
+    cntlParmMQTT = myHostName + MQTT_CNTL_PARM;  // Define variabe with the full name of the outgoing balance telemetry topic
+
     AMDP_PRINT("<processWiFiEvent> cmdTopicMQTT = ");
     AMDP_PRINTLN(cmdTopicMQTT);
+    AMDP_PRINT("<processWiFiEvent> balTopicHeadingMQTT = ");
+    AMDP_PRINTLN(balTopicHeadingMQTT);
     AMDP_PRINT("<processWiFiEvent> balTopicMQTT = ");
     AMDP_PRINTLN(balTopicMQTT);
     AMDP_PRINT("<processWiFiEvent> metTopicMQTT = ");
     AMDP_PRINTLN(metTopicMQTT);
+    AMDP_PRINT("<processWiFiEvent> cntlParmHeadingMQTT = ");
+    AMDP_PRINTLN(cntlParmHeadingMQTT);
+    AMDP_PRINT("<processWiFiEvent> cntlParmMQTT = ");
+    AMDP_PRINTLN(cntlParmMQTT);
     connectToMqtt();
     break;
   } //case
@@ -1150,7 +1172,13 @@ void publishMQTT(String topic, String msg)
   char tmp[NUMBER_OF_MILLI_DIGITS];
   itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);
   String message = String(tmp) + "," + msg;
-  if (topic == "balance")
+  if (topic == "balanceHeadings")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to balance heading topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //if
+  else if (topic == "balance")
   {
     uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to balance topic is ");
@@ -1160,6 +1188,18 @@ void publishMQTT(String topic, String msg)
   {
     uint16_t packetIdPub1 = mqttClient.publish((char *)metTopicMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to metadata topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //else if
+  else if (topic == "controlHeadings")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmHeadingMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter heading topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //else if
+  else if (topic == "controlParameters")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter topic is ");
     AMDP_PRINTLN(packetIdPub1);
   } //else if
   else
@@ -1903,15 +1943,15 @@ void checkBalanceState()
         // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
 
         // first, publish the column titles for the control parameters
-        publishMQTT("balance","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
+        publishMQTT("controlHeadings","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
 
         // then the values for the control parameters
-        publishMQTT("balance",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
+        publishMQTT("controlParameters",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
          +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
          +","+ String(Balance.activeAngle));
 
         // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
-        publishMQTT("balance", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
+        publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
 
         // the actual data points are published in balanceByAngle()
       }
