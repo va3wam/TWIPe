@@ -9,12 +9,15 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.19  2020-06-18 DE: bug fix to motor speed change smoothing code
+ *                      -make wheels respond to change in direction more quickly by aborting current step thats in the wrong direction
+ *                      -take "Ang: " label out of right OLED display
  * 0.0.18  2020-06-17 DE: add MQTT command targetAngle=f   where float f is a number of degrees. -1 is one degree back of vertical
  *                      -add telemetry support for pid_i_gain, pid_d_gain, targetAngle
  *                      -move telemetry for control params & data titles from bs.active state to bs.awake, before we get busy
  *                      -added MQTT remote control of motor speed controls with commands motor_int_slow=n and motor_int_fast=n
  *                      -added MQTT command to set angle when balancing starts, around 2 degrees.  active_angle=<float>
- *                        -new remotely controllable parameters are supported in spreadsheet version 10
+ *                      -new remotely controllable parameters are supported in spreadsheet version 10
  * 0.0.17  2020-06-17 AM: Added MQTT commands to set pid_p_gain, pid_i_gain, pid_d_gain and smoother remotely to help speed up PID tuning
  * 0.0.16  2020-06-15 DE: make OLED display optional, controlled by bool OLED_enable
  *                     -fix calculation of OldBalByAng telemetry time interval
@@ -376,7 +379,7 @@ typedef struct
   float tilt = 0;                            // forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
   int method;                                // are we using catchup distance balancing method, or angle based PID (see defs below)
   int state = 0;                             // state within balancing process. see state definitions below, as in bs_start
-  float activeAngle = 2;                     // how close to vertical, in degrees, before you start balancing attempt, & bs_active      
+  float activeAngle = 1;                     // how close to vertical, in degrees, before you start balancing attempt, & bs_active      
   float angleRadians = 0;                    // Robot tilt angle in radians
   float angleDegrees = 0;                    // Robot tilt angle in degrees - a copy of tilt for now
   //de  need to understand following line, and convert it to reflect vertical = 0 degrees
@@ -404,13 +407,13 @@ volatile int throttle_Llimit, throttle_Rlimit;            // limit that determin
 volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
 float pid;                                                  // global so updateOLED() can find it
 
-float pid_p_gain = 50;       //de multiplier for the P part of PID
+float pid_p_gain = 200;       //de multiplier for the P part of PID
 float pid_i_gain = 0;        //de multiplier for the I part of PID
 float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
-int bot_slow =600;           //de  need to fit these into structures, but quick & dirty now
-int bot_fast = 300;
-float smoother = .5 ;        // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
+int bot_slow =550;           //de  need to fit these into structures, but quick & dirty now
+int bot_fast = 350;
+float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
 int lastSpeed = 0;           // memory for above method using smoother
 
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
@@ -1350,15 +1353,19 @@ void balanceByAngle()
   if(smoother != 0)                       // if smoothing is enabled, do it
   {
     int deltaSpd = smoother * (motorInt-lastSpeed);
-    motorInt = motorInt + deltaSpd;
-    lastSpeed = motorInt;
+    motorInt = lastSpeed + deltaSpd;
   }
-  
   noInterrupts();         // block any motor interrupts while we change control parameters
   //d2  reverse direction of wheel rotation, based on observation of Dougs bot
   throttle_Lsetting = stepperMotor[LEFT_MOTOR].directionMod * motorInt;
   throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * motorInt;
-   interrupts();
+  if(lastSpeed * motorInt < 0 )     // if old and new signs are different, we've reversed desired directions
+  {                                 // and we should abort current step in the wrong direction 
+      throttle_Lcounter = 9999 ;    // force counter overflow, and thus reading of the new setting
+      throttle_Rcounter = 9999 ;
+  }
+  interrupts();
+  lastSpeed = motorInt;                 // remember last speed for smoothing and quick direction change
 
   // Assemble balance telemetry string
 
@@ -1477,7 +1484,7 @@ void updateRightOLED()
     telMilli4 = millis();         // timestamp for start of this routine
     runbit(19) ;
     rightOLED.clear();
-    rightOLED.drawString(0, 0, String("Ang: ")+String(Balance.tilt));
+    rightOLED.drawString(40, 0, String(Balance.tilt));
 //    rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));    // take this out to see impact on goIMU timing
 //    rightOLED.drawString(0, 32, String("PID: ")+String(pid));
     rightOLED.display();
