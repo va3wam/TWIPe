@@ -5,13 +5,14 @@
  * @details Handles balancing the robot by reading MPU6050 IMU data, using PID to control a pair of open loop bi-polar stepper motors 
  *          via DRV8826 motor drivers, and communicating data and recieving commands through the WiFi interface using the MQTT 
  *          protocol via an MQTT broker running on a raspberry Pi 
- * @version 0.0.20
+ * @version 0.0.21
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.21  2020-06-21 AM: Added setvar command to allow for select variables to be set remotely to speed up balance tuning
  * 0.0.20  2020-06-19 AM: Moved control parameter MQTT messages to their own MQTT topic. Also moved headings for balance and  control
  *                        parameters to their own MQTT topic. Ths will make things friendly to MQTT remote clients while maintaining
  *                        the spreadsheet process we are already using. Also corrected brief text for this code to more accurately 
@@ -442,6 +443,7 @@ typedef struct
   int unknownCmdCnt = 0;         // Track how many unknown command have been received
   int leftDRVfault = 0;          // Track how many times the left DVR8825 motor driver signals a fault
   int rightDRVfault = 0;         // Track how many times the right DVR8825 motor driver signals a fault
+  int unknownSetvarCnt = 0; // Track how many invalid variable names occur in setvar commands    
   //TODO Put datapoint below to use
   long riseTimeMax = 0;                     // Most microseconds it took for the signal rise event to happen
   long riseTimeMin = 0;                     // Least microseconds it took for the signal rise event to happen
@@ -808,6 +810,135 @@ void onMqttUnsubscribe(uint16_t packetId)
 } //onMqttUnsubscribe()
 
 /**
+ * @brief Publish a message to the specified MQTT broker topic tree
+ * @param topic The topic tree to publish the messge to
+ * @param msg The message to send
+ * # MQTT Published Messages
+ * TWIPe issues a number of messages to the MQTT broker. Each message goes to it's own topic tree. These messages and their 
+ * respective topic trees are outlined in the table below. Note hat the robot name is made up of the prefix twipe followed by the 
+ * MAC address of the ESP32. This acts as a unique identifier of the robot and is used to ensure that each robot has its own 
+ * unique data tree structure on the MQTT broker. THis design allows for multipple twipe robots to share the same MQTT broker.
+ * ## Table of Published Messages 
+ * | Topic                  | Topic Tree                       | Details                                                             |
+ * |:-----------------------|:---------------------------------|:--------------------------------------------------------------------|
+ * | Balance telemetry      | {robot name}/telemetry/balance   | Angle of IMU orientation in degrees                                 |
+ * | Robot Metadata         | {robot name}/metadata            | See metadata table for a full list of the data points being tracked |
+=================================================================================================== */
+void publishMQTT(String topic, String msg)
+{
+  runbit(12) ;
+  char tmp[NUMBER_OF_MILLI_DIGITS];
+  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);
+  String message = String(tmp) + "," + msg;
+  if (topic == "balanceHeadings")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to balance heading topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //if
+  else if (topic == "balance")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to balance topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //if
+  else if (topic == "metadata")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)metTopicMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to metadata topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //else if
+  else if (topic == "controlHeadings")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmHeadingMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter heading topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //else if
+  else if (topic == "controlParameters")
+  {
+    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter topic is ");
+    AMDP_PRINTLN(packetIdPub1);
+  } //else if
+  else
+  {
+    AMDP_PRINT("<publishMQTT> ERROR. Unknown MQTT topic tree - ");
+    AMDP_PRINTLN(topic);
+  } //else
+} //publishMQTT()
+
+/**
+ * @brief Set a control parameter variable to the new value specified in the remote setvar command 
+ * @param rCMD Remote command sent from MQTT broker
+ * @note No effort is put into verifying that the command is properly formed
+ */
+void setControlParameter(String rCMD)
+{
+  int firstComma = rCMD.indexOf(",");
+  int secondComma = rCMD.indexOf(",", firstComma + 1);
+  int lenVarName = secondComma - firstComma - 1;
+  int varNameStart = firstComma;
+  varNameStart ++;
+  String varName = rCMD.substring(varNameStart, varNameStart + lenVarName);
+  String varValue = rCMD.substring(secondComma + 1,rCMD.length());
+  AMDP_PRINT("<setControlParameter> rCMD length = ");
+  AMDP_PRINTLN(rCMD.length());
+  AMDP_PRINT("<setControlParameter> firstComma = ");
+  AMDP_PRINTLN(firstComma);
+  AMDP_PRINT("<setControlParameter> varNameStart = ");
+  AMDP_PRINTLN(varNameStart);
+  AMDP_PRINT("<setControlParameter> secondComma = ");
+  AMDP_PRINTLN(secondComma);
+  AMDP_PRINT("<setControlParameter> varName = ");
+  AMDP_PRINTLN(varName);
+  AMDP_PRINT("<setControlParameter> lenVarName = ");
+  AMDP_PRINTLN(lenVarName);
+  AMDP_PRINT("<setControlParameter> varValue = ");
+  AMDP_PRINTLN(varValue);
+  if(varName == "pid_p_gain")
+  {
+    pid_p_gain = varValue.toFloat();
+  } //if
+  else if(varName == "pid_i_gain")
+  {
+    pid_i_gain = varValue.toFloat();
+  } //else if
+  else if(varName == "pid_d_gain")
+  {
+    pid_d_gain = varValue.toFloat();
+  } //else if
+  else if(varName == "bot_slow")
+  {
+    bot_slow = varValue.toFloat();
+  } //else if
+  else if(varName == "bot_fast")
+  {
+    bot_fast = varValue.toFloat();
+  } //else if
+  else if(varName == "smoother")
+  {
+    smoother = varValue.toFloat();
+  } //else if
+  else if(varName == "robotState.targetAngleDegrees")
+  {
+    robotState.targetAngleDegrees = varValue.toFloat();
+  } //else if
+  else if(varName == "Balance.activeAngle")
+  {
+    Balance.activeAngle = varValue.toFloat();
+  } //else if
+  else
+  {
+    AMDP_PRINTLN("<setControlParameter> Unknown variable. Ignoring setvar command");
+    metadata.unknownSetvarCnt++; // Increment counter of invalid setvar variable names
+  } //else
+  // Send updated control parameter message out to sync remote clients
+  publishMQTT("controlParameters",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
+         +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
+         +","+ String(Balance.activeAngle));
+} //setControlParameter()
+
+/**
  * @brief Handle incoming messages from MQTT broker for topics subscribed to
  * @param topic Which topic this message if about
  * @param payload The content of the message sent from the MQTT broker
@@ -875,7 +1006,12 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   String tmp = String(payload).substring(0, len);
   AMDP_PRINT("<onMqttMessage> Message to process = ");
   AMDP_PRINTLN(tmp);
-  if (tmp == "balTelCON")
+  if (tmp.substring(0,6) == "setvar")
+  {
+    AMDP_PRINTLN("<onMqttMessage> Received remote variable set command");
+    setControlParameter(tmp);
+  } //if
+  else if (tmp == "balTelCON")
   {
     AMDP_PRINTLN("<onMqttMessage> Publish telemetry data to console");
     baltelMsg.destination = TARGET_CONSOLE;
@@ -1150,64 +1286,6 @@ void printBinary(byte v, int8_t num_places)
     } //if
   }   //while
 } //printBinary()
-
-/**
- * @brief Publish a message to the specified MQTT broker topic tree
- * @param topic The topic tree to publish the messge to
- * @param msg The message to send
- * # MQTT Published Messages
- * TWIPe issues a number of messages to the MQTT broker. Each message goes to it's own topic tree. These messages and their 
- * respective topic trees are outlined in the table below. Note hat the robot name is made up of the prefix twipe followed by the 
- * MAC address of the ESP32. This acts as a unique identifier of the robot and is used to ensure that each robot has its own 
- * unique data tree structure on the MQTT broker. THis design allows for multipple twipe robots to share the same MQTT broker.
- * ## Table of Published Messages 
- * | Topic                  | Topic Tree                       | Details                                                             |
- * |:-----------------------|:---------------------------------|:--------------------------------------------------------------------|
- * | Balance telemetry      | {robot name}/telemetry/balance   | Angle of IMU orientation in degrees                                 |
- * | Robot Metadata         | {robot name}/metadata            | See metadata table for a full list of the data points being tracked |
-=================================================================================================== */
-void publishMQTT(String topic, String msg)
-{
-  runbit(12) ;
-  char tmp[NUMBER_OF_MILLI_DIGITS];
-  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);
-  String message = String(tmp) + "," + msg;
-  if (topic == "balanceHeadings")
-  {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to balance heading topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //if
-  else if (topic == "balance")
-  {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to balance topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //if
-  else if (topic == "metadata")
-  {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)metTopicMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to metadata topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //else if
-  else if (topic == "controlHeadings")
-  {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmHeadingMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter heading topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //else if
-  else if (topic == "controlParameters")
-  {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmMQTT.c_str(), QOS1, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //else if
-  else
-  {
-    AMDP_PRINT("<publishMQTT> ERROR. Unknown MQTT topic tree - ");
-    AMDP_PRINTLN(topic);
-  } //else
-} //publishMQTT()
 
 /**
  * @brief Control stepping of both stepper motors. 
