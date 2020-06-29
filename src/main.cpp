@@ -5,13 +5,18 @@
  * @details Handles balancing the robot by reading MPU6050 IMU data, using PID to control a pair of open loop bi-polar stepper motors 
  *          via DRV8826 motor drivers, and communicating data and recieving commands through the WiFi interface using the MQTT 
  *          protocol via an MQTT broker running on a raspberry Pi 
- * @version 0.0.21
+ * @version 0.0.22
  * @date 2020-04-25
  * @copyright Copyright (c) 2020
  * @note Change history uses Semantic Versioning 
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.22  2020-06-24 DE: -add memory of recent angle errors for I part of PID - incomplete.
+ *                        -allow motor testing without balancing, using negative values for bot_slow and bot_high
+ *                          if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign
+ *                          if bot_fast is -ve, it's the desired MotorInt value for right wheel, including the -ve sign
+ *                          if bot_slow is -ve and bot_fast = 0, then bot_slow's speed will be used for both wheels
  * 0.0.21  2020-06-21 AM: Added setvar command to allow for select variables to be set remotely to speed up balance tuning
  * 0.0.20  2020-06-19 AM: Moved control parameter MQTT messages to their own MQTT topic. Also moved headings for balance and  control
  *                        parameters to their own MQTT topic. Ths will make things friendly to MQTT remote clients while maintaining
@@ -395,8 +400,10 @@ typedef struct
   float activeAngle = 1;                     // how close to vertical, in degrees, before you start balancing attempt, & bs_active      
   float angleRadians = 0;                    // Robot tilt angle in radians
   float angleDegrees = 0;                    // Robot tilt angle in degrees - a copy of tilt for now
-  //de  need to understand following line, and convert it to reflect vertical = 0 degrees
-  float angleTargetRadians = 1.5707961;      // Target angle robot wants to be at in radians. 1.5707961 is standing upright
+  float errHistory[20] ;                     //  rememberered angle errors for calculating I in PID
+  int errHistCount = 5;                      // number of recent angle errors to accumulate
+  int errHistPtr = 1;                        // pointer to next index in errHistory to be used
+  // float angleTargetRadians = 1.5707961;      // Target angle for robot in radians. 1.5707961 is standing upright
   float angleTargetDegrees = 0;             // Target angle robot wants to be at in degrees. 0 is standing upright
   float maxAngleMotorActiveDegrees = 30;     // Maximum angle the robot can lean at before motors shut off
   float centreOfMassError = robot.heightCOM; // Distance in inches robot's Centre Of Mass (COM) is away from target
@@ -420,12 +427,12 @@ volatile int throttle_Llimit, throttle_Rlimit;            // limit that determin
 volatile int throttle_Lsetting, throttle_Rsetting;        // value for limit calculated in BalancceByAngle()
 float pid;                                                  // global so updateOLED() can find it
 
-float pid_p_gain = 200;       //de multiplier for the P part of PID
+float pid_p_gain = 150;       //de multiplier for the P part of PID
 float pid_i_gain = 0;        //de multiplier for the I part of PID
 float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
-int bot_slow =550;           //de  need to fit these into structures, but quick & dirty now
-int bot_fast = 350;
+int bot_slow =700;           //de  need to fit these into structures, but quick & dirty now
+int bot_fast = 300;
 float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
 int lastSpeed = 0;           // memory for above method using smoother
 
@@ -1455,35 +1462,55 @@ void calcBalanceParmeters(float angleRadians)
 =================================================================================================== */
 void balanceByAngle()
 {
-  float angleErr = Balance.tilt - robotState.targetAngleDegrees;   // difference between current and desired angles
-  pid = pid_p_gain * angleErr;            // apply the multiplier for the P in PID
-                                          // ignore the I and D in PID, for now
-  if(pid >  400) pid = 400;               // range limit pid
-  if(pid < -400) pid = -400;
-  if(abs(pid) < 5) pid = 0;               // create a dead band to stop motors when robot is balanced
-
-  if(pid > 0) motorInt = int(    bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;  // motorInt is speed interval in timer ticks
-  if(pid < 0) motorInt = int( -1*bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;
-  if(pid == 0) motorInt = 0 ;
-
-  // experimental  motor speed change smoothing
-  // smoother is a variable, and the control parameter - smoother == 0 means don't smooth
-  if(smoother != 0)                       // if smoothing is enabled, do it
+  if(bot_slow >= 0 )                         // if we're doing PID balancing rather than a speed test, react to current angle
   {
-    int deltaSpd = smoother * (motorInt-lastSpeed);
-    motorInt = lastSpeed + deltaSpd;
-  }
-  noInterrupts();         // block any motor interrupts while we change control parameters
-  //d2  reverse direction of wheel rotation, based on observation of Dougs bot
-  throttle_Lsetting = stepperMotor[LEFT_MOTOR].directionMod * motorInt;
-  throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * motorInt;
-  if(lastSpeed * motorInt < 0 )     // if old and new signs are different, we've reversed desired directions
-  {                                 // and we should abort current step in the wrong direction 
-      throttle_Lcounter = 9999 ;    // force counter overflow, and thus reading of the new setting
-      throttle_Rcounter = 9999 ;
-  }
-  interrupts();
-  lastSpeed = motorInt;                 // remember last speed for smoothing and quick direction change
+    float angleErr = Balance.tilt - robotState.targetAngleDegrees;   // difference between current and desired angles
+    pid = pid_p_gain * angleErr;            // apply the multiplier for the P in PID
+                                            // ignore the I and D in PID, for now
+    if(pid >  400) pid = 400;               // range limit pid
+    if(pid < -400) pid = -400;
+    if(abs(pid) < 5) pid = 0;               // create a dead band to stop motors when robot is balanced
+
+    if(pid > 0) motorInt = int(    bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;  // motorInt is speed interval in timer ticks
+    if(pid < 0) motorInt = int( -1*bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;
+    if(pid == 0) motorInt = 0 ;
+
+    // experimental  motor speed change smoothing
+    // smoother is a variable, and the control parameter - smoother == 0 means don't smooth
+    if(smoother != 0)                       // if smoothing is enabled, do it
+    {
+      int deltaSpd = smoother * (motorInt-lastSpeed);
+      motorInt = lastSpeed + deltaSpd;
+    }
+    noInterrupts();         // block any motor interrupts while we change control parameters
+    //d2  reverse direction of wheel rotation, based on observation of Dougs bot
+    throttle_Lsetting = stepperMotor[LEFT_MOTOR].directionMod * motorInt;
+    throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * motorInt;
+    if(lastSpeed * motorInt < 0 )     // if old and new signs are different, we've reversed desired directions
+    {                                 // and we should abort current step in the wrong direction 
+        throttle_Lcounter = 9999 ;    // force counter overflow, and thus reading of the new setting
+        throttle_Rcounter = 9999 ;
+    }
+    interrupts();
+    lastSpeed = motorInt;                 // remember last speed for smoothing and quick direction change
+  }  //if(bot_slow > 0 )
+  else        // -ve bot_slow and bot_fast indicates we're doing a speed test rather than balancing
+              //   if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign 
+              //   if bot_fast is -ve, it's the desired MotorInt value for right wheel, including the -ve sign
+              //   if bot_slow is -ve and bot_fast >= 0, then bot_slow's speed will be used for both wheels
+ 
+  {           // follow directed speed regardless of current tilt angle
+          AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+          digitalWrite(gp_DRV1_ENA, LOW);
+          digitalWrite(gp_DRV2_ENA, LOW);
+
+    noInterrupts();         // block any motor interrupts while we change control parameters
+    throttle_Lsetting = stepperMotor[ LEFT_MOTOR].directionMod * bot_slow;
+    if(bot_fast < 0) { throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_fast; }
+    else {{ throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_slow; }  }
+    interrupts();
+  }  // else
+  
 
   // Assemble balance telemetry string
 
@@ -1820,8 +1847,8 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
-    stepperMotor[RIGHT_MOTOR].directionMod = -1 ;        // rotate as directed by software, then reversed
-    stepperMotor[LEFT_MOTOR].directionMod = -1 ;  
+    stepperMotor[RIGHT_MOTOR].directionMod = 1 ;        // rotate as directed by software, then reversed
+    stepperMotor[LEFT_MOTOR].directionMod = 1 ;  
     MQTT_BROKER_IP = "192.168.0.99";
   } //else if
   else
@@ -2032,6 +2059,10 @@ void checkBalanceState()
         publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
 
         // the actual data points are published in balanceByAngle()
+
+        for (int t =1; t<= Balance.errHistCount; t++) {Balance.errHistory[t] = 0;}  // initialize remembered errors to zero
+        Balance.errHistPtr = 1;                                             // next index in errHistory to be used is 1
+
       }
       if(abs(Balance.tilt > Balance.maxAngleMotorActiveDegrees))    // if we're more than 30 degress from vertical...
       { Balance.state = bs_sleep;                                   // fall back to sleep
@@ -2140,7 +2171,7 @@ void loop()
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
       checkBalanceState();                // handle balance state changes: sleep, awake, active
-      if(Balance.state ==bs_active)       // if we're in a state where we can try to balance
+      if(Balance.state ==bs_active || bot_slow < 0)       // if we're in a state where we can try to balance or do speed test
       {                                   // then do so, depending on which method we're using
         if(Balance.method == bm_catchup)
         {
@@ -2154,6 +2185,7 @@ void loop()
         tm_OldbalByAng = telMilli5 - telMilli4; // telemetry measurement: time in BalanceByAngle, reported in NEXT MQTT publish
         }
       } // if(Balance.state...)
+                 
     }                               // if rCode
   }                                 // if millis() > goIMU
   else 
