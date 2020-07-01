@@ -17,6 +17,7 @@
  *                          if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign
  *                          if bot_fast is -ve, it's the desired MotorInt value for right wheel, including the -ve sign
  *                          if bot_slow is -ve and bot_fast = 0, then bot_slow's speed will be used for both wheels
+ *                         -play with target angle = 1, and tmrIMU=10
  * 0.0.21  2020-06-21 AM: Added setvar command to allow for select variables to be set remotely to speed up balance tuning
  * 0.0.20  2020-06-19 AM: Moved control parameter MQTT messages to their own MQTT topic. Also moved headings for balance and  control
  *                        parameters to their own MQTT topic. Ths will make things friendly to MQTT remote clients while maintaining
@@ -298,7 +299,7 @@ static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU 20                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
+#define tmrIMU 10                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
