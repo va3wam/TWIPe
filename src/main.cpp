@@ -1827,8 +1827,8 @@ void cfgByMAC()
     stepperMotor[LEFT_MOTOR].speedRange = 300; // Range of speeds motor can effectively use
     stepperMotor[RIGHT_MOTOR].interval = stepperMotor[RIGHT_MOTOR].minSpeed + stepperMotor[RIGHT_MOTOR].speedRange;
     stepperMotor[LEFT_MOTOR].interval = stepperMotor[LEFT_MOTOR].minSpeed + stepperMotor[LEFT_MOTOR].speedRange;
-    stepperMotor[RIGHT_MOTOR].directionMod = 1 ;        // rotate as directed by software
-    stepperMotor[LEFT_MOTOR].directionMod = 1 ;  
+    stepperMotor[RIGHT_MOTOR].directionMod = -1 ;        // rotate as directed by software
+    stepperMotor[LEFT_MOTOR].directionMod = -1 ;  
     MQTT_BROKER_IP = "192.168.2.21";
   }                                        //if
   else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
