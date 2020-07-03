@@ -12,6 +12,8 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.23  2020-07-01 DE: -remove display of tilt angle in right OLED to save compute cycles
+ *                        -crank tmrIMU down to 6 msec
  * 0.0.22  2020-06-24 DE: -add memory of recent angle errors for I part of PID - incomplete.
  *                        -allow motor testing without balancing, using negative values for bot_slow and bot_high
  *                          if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign
@@ -299,7 +301,7 @@ static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU 10                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
+#define tmrIMU  6                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -314,7 +316,6 @@ unsigned long holdMilli1;         // need to keep last value to calculate delta 
 unsigned long telMilli2;          // timestamp used for telemetry reporting
 unsigned long telMilli3;          // timestamp used for telemetry reporting
 unsigned long telMilli4;          // timestamp used for telemetry reporting
-unsigned long holdMilli4;         // need to retain old value for balanceByAngle telemetry calculation
 unsigned long telMilli5;          // timestamp used for telemetry reporting
 
 unsigned long tm_IMUdelta;        // telemetry value: how long between goIMU calls. should be tmrIMU
@@ -1508,7 +1509,7 @@ void balanceByAngle()
     noInterrupts();         // block any motor interrupts while we change control parameters
     throttle_Lsetting = stepperMotor[ LEFT_MOTOR].directionMod * bot_slow;
     if(bot_fast < 0) { throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_fast; }
-    else {{ throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_slow; }  }
+    else { throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_slow;  }
     interrupts();
   }  // else
   
@@ -1629,11 +1630,14 @@ void updateRightOLED()
   {
     telMilli4 = millis();         // timestamp for start of this routine
     runbit(19) ;
+/* ---- remove angle display in right OLED to save compute cycles  
     rightOLED.clear();
     rightOLED.drawString(40, 0, String(Balance.tilt));
 //    rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));    // take this out to see impact on goIMU timing
 //    rightOLED.drawString(0, 32, String("PID: ")+String(pid));
     rightOLED.display();
+   ---- end of removed portion
+   */
     telMilli5 = millis();                  // timestamp between L & R OLED updates
     tm_ROLEDtime = telMilli5 - telMilli4; // telemetry measure - time spent in updateRightOLED
 //  following routine is called once, from setup(), since the info doesn't change!
@@ -2166,7 +2170,6 @@ void loop()
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
     tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
     boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
-    holdMilli4 = telMilli4;               // save previous timestamp for BalanceByAngle() calculation
     telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
     tm_allReadIMU = telMilli4 - telMilli1; // telemetry measurement: total time for readIMU routine
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
