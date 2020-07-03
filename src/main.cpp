@@ -14,6 +14,7 @@
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
  * 0.0.23  2020-07-01 DE: -remove display of tilt angle in right OLED to save compute cycles
  *                        -crank tmrIMU down to 6 msec
+ *                        -allow a single ISR for motor controllers, compile time control: bool single_drv_isr
  * 0.0.22  2020-06-24 DE: -add memory of recent angle errors for I part of PID - incomplete.
  *                        -allow motor testing without balancing, using negative values for bot_slow and bot_high
  *                          if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign
@@ -288,6 +289,7 @@ hw_timer_t *leftMotorTimer = NULL;  // Pointer to left motor ISR
 //portMUX_TYPE rightMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right motor variable access for ISR & main thread
 //portMUX_TYPE leftDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left DVR8825 fault err var. access for ISR & main thread
 //portMUX_TYPE rightDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right DVR8825 fault err var. access for ISR & main thread
+bool single_motor_isr=false;          // use single timer ISR that handles both motors
 typedef struct
 {
   long interruptCounter;                      // Counter for step signals to the DRV8825 motor driver
@@ -1369,10 +1371,24 @@ void IRAM_ATTR rightMotorTimerISR()
       else digitalWrite(gp_DRV1_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
     }
     else if(throttle_Rcounter == 1) digitalWrite(gp_DRV1_STEP,HIGH);  // start the step pulse at end of first counted tick
-    else if(throttle_Rcounter == 2) digitalWrite(gp_DRV1_STEP,LOW);   // end the step pulse at end of second counted tick  
+    else if(throttle_Rcounter == 2) digitalWrite(gp_DRV1_STEP,LOW);   // end the step pulse at end of second counted tick
+    
+    if(single_motor_isr)                        // check both motors in this ISR if we're optimizing interrupts
+    { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
+      if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
+      { throttle_Lcounter = 0;                    // yes, reset the counter, which goes upwards
+        throttle_Llimit = throttle_Lsetting;      // reset upper limit to what the background calculated in balanceByAngle()
+        if(throttle_Llimit< 0)                    // negative throttle means backwards
+        { digitalWrite(gp_DRV2_DIR,LOW);          // write zero to direction bit on DRV8825 motor controller
+          throttle_Llimit *= -1;                  // get back to a +ve number for counter comparisons
+        }
+        else digitalWrite(gp_DRV2_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
+      }
+      else if(throttle_Lcounter == 1) digitalWrite(gp_DRV2_STEP,HIGH);  // start the step pulse at end of first counted tick
+      else if(throttle_Lcounter == 2) digitalWrite(gp_DRV2_STEP,LOW);   // end the step pulse at end of second counted tick  
+    } // if(single_motor_isr)
+
   } // if(Balance.method == bm_angle)
-
-
 
 } //rightMotorTimerISR()
 
@@ -1381,7 +1397,7 @@ void IRAM_ATTR rightMotorTimerISR()
  * 
 =================================================================================================== */
 //TODO Put balance logic in here
-void IRAM_ATTR leftMotorTimerISR()
+void IRAM_ATTR leftMotorTimerISR()     // this ISR not called at all if single_motor_isr == true
 {
   runbit(15) ;
   if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
@@ -1403,6 +1419,7 @@ void IRAM_ATTR leftMotorTimerISR()
     stepMotor(motor, tmp); 
   } // if(Balance.method == bm_catchup)
 
+// if single_motor_isr is true, the leftMotorTimerISR() is never called. work is done in rightMotorTimerISR()
   if(Balance.method == bm_angle)                // this is the ISR for the angle method of balancing
   { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
     if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
@@ -1988,23 +2005,31 @@ void setupDriverMotors()
   rightMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);   // Set Timer0 configuration
   bool intOnEdge = true;                                                 // Interrupt on rising edge of Timer0 signal
   timerAttachInterrupt(rightMotorTimer, &rightMotorTimerISR, intOnEdge); // Attach ISR to Timer0
-  bool autoReload = true;                                                // Shoud the ISR timer reload after it runs
+  bool autoReload = true;                                                // Should the ISR timer reload after it runs
   timerAlarmWrite(rightMotorTimer, motorISRus, autoReload);              // Set up conditions to call ISR
-  timerAlarmEnable(rightMotorTimer);                                     // Enable ISR
-  // Set up left motor driver ISR
-  AMDP_PRINTLN("<setupDriverMotors> Configure timer1 to control the left motor");
-  timerNumber = 1;                                                     // Timer1 will be used to control the right motor
-  prescaleDivider = 80;                                                // Timer1 uses a presaler (divider) of 80 so interrupts occur at 1us
-  countUp = true;                                                      // Timer1 will count up not down
-  leftMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);  // Set Timer1 configuration
-  timerAttachInterrupt(leftMotorTimer, &leftMotorTimerISR, intOnEdge); // Attach ISR to Timer1
-  autoReload = true;                                                   // Shoud the ISR timer reload after it runs
-  timerAlarmWrite(leftMotorTimer, motorISRus, autoReload);             // Set up conditions to call ISR
-  timerAlarmEnable(leftMotorTimer);                                    // Enable ISR
-  // Attach interrupts to track DVR8825 faults
-  AMDP_PRINTLN("<setupDriverMotors> Monitor left & right DRV8825 drivers for faults");
-  attachInterrupt(gp_DRV1_FAULT, rightDRV8825fault, FALLING);
-  attachInterrupt(gp_DRV2_FAULT, leftDRV8825fault, FALLING);
+  timerAlarmEnable(rightMotorTimer);                                     // Enable timer interrupt
+  if(single_motor_isr == false)                                          // if we're using one ISR for both motors, we're done ISR set up
+  {
+    // otherwise, Set up left motor driver ISR
+    AMDP_PRINTLN("<setupDriverMotors> Configure timer1 to control the left motor");
+    timerNumber = 1;                                                     // Timer1 will be used to control the right motor
+    prescaleDivider = 80;                                                // Timer1 uses a presaler (divider) of 80 so interrupts occur at 1us
+    countUp = true;                                                      // Timer1 will count up not down
+    leftMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);  // Set Timer1 configuration
+    timerAttachInterrupt(leftMotorTimer, &leftMotorTimerISR, intOnEdge); // Attach ISR to Timer1
+    autoReload = true;                                                   // Shoud thote ISR timer reload after it runs
+    timerAlarmWrite(leftMotorTimer, motorISRus, autoReload);             // Set up conditions to call ISR
+    timerAlarmEnable(leftMotorTimer);                                    // Enable ISR
+  }
+  else
+  {
+    AMDP_PRINTLN("<setupDriverMotors> timer0 will control the left motor also");
+  }
+        
+   // Attach interrupts to track DVR8825 faults
+    AMDP_PRINTLN("<setupDriverMotors> Monitor left & right DRV8825 drivers for faults");
+    attachInterrupt(gp_DRV2_FAULT, leftDRV8825fault, FALLING);
+    attachInterrupt(gp_DRV1_FAULT, rightDRV8825fault, FALLING);            // and specify ISR to call
 } //setupDriverMotors()
 
 /**
