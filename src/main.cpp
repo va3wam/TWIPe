@@ -12,6 +12,11 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.23  2020-07-01 DE: -remove display of tilt angle in right OLED to save compute cycles
+ *                        -crank tmrIMU down to 6 msec
+ *                        -allow a single ISR for motor controllers, compile time control: bool single_drv_isr
+ *                        - first attempt at I part of PID, making pid_i_gain parameter active
+ *                        -adjusting the deadband size in balanceByAngle upwards from original setting of 5
  * 0.0.22  2020-06-24 DE: -add memory of recent angle errors for I part of PID - incomplete.
  *                        -allow motor testing without balancing, using negative values for bot_slow and bot_high
  *                          if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign
@@ -286,6 +291,7 @@ hw_timer_t *leftMotorTimer = NULL;  // Pointer to left motor ISR
 //portMUX_TYPE rightMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right motor variable access for ISR & main thread
 //portMUX_TYPE leftDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left DVR8825 fault err var. access for ISR & main thread
 //portMUX_TYPE rightDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right DVR8825 fault err var. access for ISR & main thread
+bool single_motor_isr=true;          // use single timer ISR that handles both motors
 typedef struct
 {
   long interruptCounter;                      // Counter for step signals to the DRV8825 motor driver
@@ -299,7 +305,7 @@ static volatile motorControl stepperMotor[2]; // Define an array of 2 motors. 0 
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU 10                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
+#define tmrIMU  6                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -314,7 +320,6 @@ unsigned long holdMilli1;         // need to keep last value to calculate delta 
 unsigned long telMilli2;          // timestamp used for telemetry reporting
 unsigned long telMilli3;          // timestamp used for telemetry reporting
 unsigned long telMilli4;          // timestamp used for telemetry reporting
-unsigned long holdMilli4;         // need to retain old value for balanceByAngle telemetry calculation
 unsigned long telMilli5;          // timestamp used for telemetry reporting
 
 unsigned long tm_IMUdelta;        // telemetry value: how long between goIMU calls. should be tmrIMU
@@ -432,14 +437,20 @@ float pid_p_gain = 150;       //de multiplier for the P part of PID
 float pid_i_gain = 0;        //de multiplier for the I part of PID
 float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
-int bot_slow =700;           //de  need to fit these into structures, but quick & dirty now
+int bot_slow =900;           //de  need to fit these into structures, but quick & dirty now
 int bot_fast = 300;
 float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
 int lastSpeed = 0;           // memory for above method using smoother
+float ang_err_1 = 0;         // remembered error from previous bananceByAngle() call
+float ang_err_2 = 0;         // remembered error from 2nd last bananceByAngle() call
+float ang_err_3 = 0;         // remembered error from 3rd last bananceByAngle() call
+float ang_err_4 = 0;         // remembered error from 4th last bananceByAngle() call
+float ang_err_5 = 0;         // remembered error from 5th last bananceByAngle() call
+
 
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
 
-// Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment.
+// Define global metadata variables. Used to understand the state of the robot, its peripherals and its environment.
 typedef struct
 {
   int wifiConAttemptsCnt = 0;    // Track the number of over all attempts made to connect to the WiFi Access Point
@@ -1368,10 +1379,24 @@ void IRAM_ATTR rightMotorTimerISR()
       else digitalWrite(gp_DRV1_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
     }
     else if(throttle_Rcounter == 1) digitalWrite(gp_DRV1_STEP,HIGH);  // start the step pulse at end of first counted tick
-    else if(throttle_Rcounter == 2) digitalWrite(gp_DRV1_STEP,LOW);   // end the step pulse at end of second counted tick  
+    else if(throttle_Rcounter == 2) digitalWrite(gp_DRV1_STEP,LOW);   // end the step pulse at end of second counted tick
+    
+    if(single_motor_isr)                        // check both motors in this ISR if we're optimizing interrupts
+    { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
+      if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
+      { throttle_Lcounter = 0;                    // yes, reset the counter, which goes upwards
+        throttle_Llimit = throttle_Lsetting;      // reset upper limit to what the background calculated in balanceByAngle()
+        if(throttle_Llimit< 0)                    // negative throttle means backwards
+        { digitalWrite(gp_DRV2_DIR,LOW);          // write zero to direction bit on DRV8825 motor controller
+          throttle_Llimit *= -1;                  // get back to a +ve number for counter comparisons
+        }
+        else digitalWrite(gp_DRV2_DIR,HIGH);      // if not negative limit value, set wheel direction = forward
+      }
+      else if(throttle_Lcounter == 1) digitalWrite(gp_DRV2_STEP,HIGH);  // start the step pulse at end of first counted tick
+      else if(throttle_Lcounter == 2) digitalWrite(gp_DRV2_STEP,LOW);   // end the step pulse at end of second counted tick  
+    } // if(single_motor_isr)
+
   } // if(Balance.method == bm_angle)
-
-
 
 } //rightMotorTimerISR()
 
@@ -1380,7 +1405,7 @@ void IRAM_ATTR rightMotorTimerISR()
  * 
 =================================================================================================== */
 //TODO Put balance logic in here
-void IRAM_ATTR leftMotorTimerISR()
+void IRAM_ATTR leftMotorTimerISR()     // this ISR not called at all if single_motor_isr == true
 {
   runbit(15) ;
   if(Balance.method == bm_catchup)                // this is the ISR for the catchup method of balancing
@@ -1402,6 +1427,7 @@ void IRAM_ATTR leftMotorTimerISR()
     stepMotor(motor, tmp); 
   } // if(Balance.method == bm_catchup)
 
+// if single_motor_isr is true, the leftMotorTimerISR() is never called. work is done in rightMotorTimerISR()
   if(Balance.method == bm_angle)                // this is the ISR for the angle method of balancing
   { throttle_Lcounter ++;                       // increment our once per interrupt tick counter
     if(throttle_Lcounter > throttle_Llimit)     // did that take us to the limit value?
@@ -1467,10 +1493,17 @@ void balanceByAngle()
   {
     float angleErr = Balance.tilt - robotState.targetAngleDegrees;   // difference between current and desired angles
     pid = pid_p_gain * angleErr;            // apply the multiplier for the P in PID
-                                            // ignore the I and D in PID, for now
+    float I_error =angleErr + ang_err_1 + ang_err_2 + ang_err_3 + ang_err_4 + ang_err_5;  // figure the I value in PID
+    pid = pid + pid_i_gain * I_error;       // multiply it by its control parameter for gain & add to overall pid
+    ang_err_5 = ang_err_4 ;                 // shuffle remembered errors to make room for the current one
+    ang_err_4 = ang_err_3 ;
+    ang_err_3 = ang_err_2 ;
+    ang_err_2 = ang_err_1 ;
+    ang_err_1 = angleErr  ;                 // and current error becomes the most recent one
+                                            // ignore D in PID, for now
     if(pid >  400) pid = 400;               // range limit pid
     if(pid < -400) pid = -400;
-    if(abs(pid) < 5) pid = 0;               // create a dead band to stop motors when robot is balanced
+    if(abs(pid) < 15) pid = 0;              // create a dead band to stop motors when robot is balanced
 
     if(pid > 0) motorInt = int(    bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;  // motorInt is speed interval in timer ticks
     if(pid < 0) motorInt = int( -1*bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;
@@ -1501,14 +1534,14 @@ void balanceByAngle()
               //   if bot_slow is -ve and bot_fast >= 0, then bot_slow's speed will be used for both wheels
  
   {           // follow directed speed regardless of current tilt angle
-          AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+  //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
           digitalWrite(gp_DRV1_ENA, LOW);
           digitalWrite(gp_DRV2_ENA, LOW);
 
     noInterrupts();         // block any motor interrupts while we change control parameters
     throttle_Lsetting = stepperMotor[ LEFT_MOTOR].directionMod * bot_slow;
     if(bot_fast < 0) { throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_fast; }
-    else {{ throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_slow; }  }
+    else { throttle_Rsetting = stepperMotor[RIGHT_MOTOR].directionMod * bot_slow;  }
     interrupts();
   }  // else
   
@@ -1629,11 +1662,14 @@ void updateRightOLED()
   {
     telMilli4 = millis();         // timestamp for start of this routine
     runbit(19) ;
+/* ---- remove angle display in right OLED to save compute cycles  
     rightOLED.clear();
     rightOLED.drawString(40, 0, String(Balance.tilt));
 //    rightOLED.drawString(0, 16, String("Mtr: ")+String(motorInt));    // take this out to see impact on goIMU timing
 //    rightOLED.drawString(0, 32, String("PID: ")+String(pid));
     rightOLED.display();
+   ---- end of removed portion
+   */
     telMilli5 = millis();                  // timestamp between L & R OLED updates
     tm_ROLEDtime = telMilli5 - telMilli4; // telemetry measure - time spent in updateRightOLED
 //  following routine is called once, from setup(), since the info doesn't change!
@@ -1984,23 +2020,31 @@ void setupDriverMotors()
   rightMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);   // Set Timer0 configuration
   bool intOnEdge = true;                                                 // Interrupt on rising edge of Timer0 signal
   timerAttachInterrupt(rightMotorTimer, &rightMotorTimerISR, intOnEdge); // Attach ISR to Timer0
-  bool autoReload = true;                                                // Shoud the ISR timer reload after it runs
+  bool autoReload = true;                                                // Should the ISR timer reload after it runs
   timerAlarmWrite(rightMotorTimer, motorISRus, autoReload);              // Set up conditions to call ISR
-  timerAlarmEnable(rightMotorTimer);                                     // Enable ISR
-  // Set up left motor driver ISR
-  AMDP_PRINTLN("<setupDriverMotors> Configure timer1 to control the left motor");
-  timerNumber = 1;                                                     // Timer1 will be used to control the right motor
-  prescaleDivider = 80;                                                // Timer1 uses a presaler (divider) of 80 so interrupts occur at 1us
-  countUp = true;                                                      // Timer1 will count up not down
-  leftMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);  // Set Timer1 configuration
-  timerAttachInterrupt(leftMotorTimer, &leftMotorTimerISR, intOnEdge); // Attach ISR to Timer1
-  autoReload = true;                                                   // Shoud the ISR timer reload after it runs
-  timerAlarmWrite(leftMotorTimer, motorISRus, autoReload);             // Set up conditions to call ISR
-  timerAlarmEnable(leftMotorTimer);                                    // Enable ISR
-  // Attach interrupts to track DVR8825 faults
-  AMDP_PRINTLN("<setupDriverMotors> Monitor left & right DRV8825 drivers for faults");
-  attachInterrupt(gp_DRV1_FAULT, rightDRV8825fault, FALLING);
-  attachInterrupt(gp_DRV2_FAULT, leftDRV8825fault, FALLING);
+  timerAlarmEnable(rightMotorTimer);                                     // Enable timer interrupt
+  if(single_motor_isr == false)                                          // if we're using one ISR for both motors, we're done ISR set up
+  {
+    // otherwise, Set up left motor driver ISR
+    AMDP_PRINTLN("<setupDriverMotors> Configure timer1 to control the left motor");
+    timerNumber = 1;                                                     // Timer1 will be used to control the right motor
+    prescaleDivider = 80;                                                // Timer1 uses a presaler (divider) of 80 so interrupts occur at 1us
+    countUp = true;                                                      // Timer1 will count up not down
+    leftMotorTimer = timerBegin(timerNumber, prescaleDivider, countUp);  // Set Timer1 configuration
+    timerAttachInterrupt(leftMotorTimer, &leftMotorTimerISR, intOnEdge); // Attach ISR to Timer1
+    autoReload = true;                                                   // Shoud thote ISR timer reload after it runs
+    timerAlarmWrite(leftMotorTimer, motorISRus, autoReload);             // Set up conditions to call ISR
+    timerAlarmEnable(leftMotorTimer);                                    // Enable ISR
+  }
+  else
+  {
+    AMDP_PRINTLN("<setupDriverMotors> timer0 will control the left motor also");
+  }
+        
+   // Attach interrupts to track DVR8825 faults
+    AMDP_PRINTLN("<setupDriverMotors> Monitor left & right DRV8825 drivers for faults");
+    attachInterrupt(gp_DRV2_FAULT, leftDRV8825fault, FALLING);
+    attachInterrupt(gp_DRV1_FAULT, rightDRV8825fault, FALLING);            // and specify ISR to call
 } //setupDriverMotors()
 
 /**
@@ -2026,6 +2070,22 @@ void checkBalanceState()
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
         // update left eye with network info that is now available and static
         updateLeftOLEDNetInfo();        // put IP, MAC, Accesspoint & MQTT hostname into left eye.
+
+        // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
+
+        // first, publish the column titles for the control parameters
+        publishMQTT("controlHeadings","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
+
+        // then the values for the control parameters
+        publishMQTT("controlParameters",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
+         +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
+         +","+ String(Balance.activeAngle));
+
+        // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
+        publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
+
+        // the actual data points are published in balanceByAngle()
+
       }    // if (abs(Balance.tilt)
 
       else // otherwise robot has such a big tilt that it should not be trying to balance
@@ -2046,23 +2106,15 @@ void checkBalanceState()
       { Balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
         
-        // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
-
-        // first, publish the column titles for the control parameters
-        publishMQTT("controlHeadings","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
-
-        // then the values for the control parameters
-        publishMQTT("controlParameters",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
-         +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
-         +","+ String(Balance.activeAngle));
-
-        // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
-        publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
-
-        // the actual data points are published in balanceByAngle()
 
         for (int t =1; t<= Balance.errHistCount; t++) {Balance.errHistory[t] = 0;}  // initialize remembered errors to zero
         Balance.errHistPtr = 1;                                             // next index in errHistory to be used is 1
+        // quick and dirty version of the above, dodging all the indexing
+        ang_err_1 = 0;     // start with no remembered error history
+        ang_err_2 = 0;
+        ang_err_3 = 0;
+        ang_err_4 = 0;
+        ang_err_5 = 0;
 
       }
       if(abs(Balance.tilt > Balance.maxAngleMotorActiveDegrees))    // if we're more than 30 degress from vertical...
@@ -2088,7 +2140,7 @@ void checkBalanceState()
 
 /**
  * @brief Set the robot's objective
- * @param objective String with human readabe objective for the robot to pursue
+ * @param objective String with human readable objective for the robot to pursue
  * ## Table of robot objectives 
  * | Item                     | Details                                                                                               |
  * |:-------------------------|:------------------------------------------------------------------------------------------------------|
@@ -2166,7 +2218,6 @@ void loop()
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
     tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
     boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
-    holdMilli4 = telMilli4;               // save previous timestamp for BalanceByAngle() calculation
     telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
     tm_allReadIMU = telMilli4 - telMilli1; // telemetry measurement: total time for readIMU routine
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
