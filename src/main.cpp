@@ -15,6 +15,8 @@
  * 0.0.23  2020-07-01 DE: -remove display of tilt angle in right OLED to save compute cycles
  *                        -crank tmrIMU down to 6 msec
  *                        -allow a single ISR for motor controllers, compile time control: bool single_drv_isr
+ *                        - first attempt at I part of PID, making pid_i_gain parameter active
+ *                        -adjusting the deadband size in balanceByAngle upwards from original setting of 5
  * 0.0.22  2020-06-24 DE: -add memory of recent angle errors for I part of PID - incomplete.
  *                        -allow motor testing without balancing, using negative values for bot_slow and bot_high
  *                          if bot_slow is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign
@@ -289,7 +291,7 @@ hw_timer_t *leftMotorTimer = NULL;  // Pointer to left motor ISR
 //portMUX_TYPE rightMotorTimerMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right motor variable access for ISR & main thread
 //portMUX_TYPE leftDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate left DVR8825 fault err var. access for ISR & main thread
 //portMUX_TYPE rightDRVMux = portMUX_INITIALIZER_UNLOCKED; // Mux to coordinate right DVR8825 fault err var. access for ISR & main thread
-bool single_motor_isr=false;          // use single timer ISR that handles both motors
+bool single_motor_isr=true;          // use single timer ISR that handles both motors
 typedef struct
 {
   long interruptCounter;                      // Counter for step signals to the DRV8825 motor driver
@@ -435,14 +437,20 @@ float pid_p_gain = 150;       //de multiplier for the P part of PID
 float pid_i_gain = 0;        //de multiplier for the I part of PID
 float pid_d_gain = 0;        //de multiplier for the D part of PID
 int motorInt;                // motor speed, i.e. interval between steps in timer ticks
-int bot_slow =700;           //de  need to fit these into structures, but quick & dirty now
+int bot_slow =900;           //de  need to fit these into structures, but quick & dirty now
 int bot_fast = 300;
 float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing  
 int lastSpeed = 0;           // memory for above method using smoother
+float ang_err_1 = 0;         // remembered error from previous bananceByAngle() call
+float ang_err_2 = 0;         // remembered error from 2nd last bananceByAngle() call
+float ang_err_3 = 0;         // remembered error from 3rd last bananceByAngle() call
+float ang_err_4 = 0;         // remembered error from 4th last bananceByAngle() call
+float ang_err_5 = 0;         // remembered error from 5th last bananceByAngle() call
+
 
 //portMUX_TYPE balanceMUX = portMUX_INITIALIZER_UNLOCKED; // Syncronize balance variables between ISR and loop()
 
-// Define global metadata variables. Used too understand the state of the robot, its peripherals and its environment.
+// Define global metadata variables. Used to understand the state of the robot, its peripherals and its environment.
 typedef struct
 {
   int wifiConAttemptsCnt = 0;    // Track the number of over all attempts made to connect to the WiFi Access Point
@@ -1485,10 +1493,17 @@ void balanceByAngle()
   {
     float angleErr = Balance.tilt - robotState.targetAngleDegrees;   // difference between current and desired angles
     pid = pid_p_gain * angleErr;            // apply the multiplier for the P in PID
-                                            // ignore the I and D in PID, for now
+    float I_error =angleErr + ang_err_1 + ang_err_2 + ang_err_3 + ang_err_4 + ang_err_5;  // figure the I value in PID
+    pid = pid + pid_i_gain * I_error;       // multiply it by its control parameter for gain & add to overall pid
+    ang_err_5 = ang_err_4 ;                 // shuffle remembered errors to make room for the current one
+    ang_err_4 = ang_err_3 ;
+    ang_err_3 = ang_err_2 ;
+    ang_err_2 = ang_err_1 ;
+    ang_err_1 = angleErr  ;                 // and current error becomes the most recent one
+                                            // ignore D in PID, for now
     if(pid >  400) pid = 400;               // range limit pid
     if(pid < -400) pid = -400;
-    if(abs(pid) < 5) pid = 0;               // create a dead band to stop motors when robot is balanced
+    if(abs(pid) < 15) pid = 0;              // create a dead band to stop motors when robot is balanced
 
     if(pid > 0) motorInt = int(    bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;  // motorInt is speed interval in timer ticks
     if(pid < 0) motorInt = int( -1*bot_slow - (pid/400)*(bot_slow - bot_fast) ) ;
@@ -1519,7 +1534,7 @@ void balanceByAngle()
               //   if bot_slow is -ve and bot_fast >= 0, then bot_slow's speed will be used for both wheels
  
   {           // follow directed speed regardless of current tilt angle
-          AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+  //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
           digitalWrite(gp_DRV1_ENA, LOW);
           digitalWrite(gp_DRV2_ENA, LOW);
 
@@ -2055,6 +2070,22 @@ void checkBalanceState()
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
         // update left eye with network info that is now available and static
         updateLeftOLEDNetInfo();        // put IP, MAC, Accesspoint & MQTT hostname into left eye.
+
+        // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
+
+        // first, publish the column titles for the control parameters
+        publishMQTT("controlHeadings","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
+
+        // then the values for the control parameters
+        publishMQTT("controlParameters",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
+         +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
+         +","+ String(Balance.activeAngle));
+
+        // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
+        publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
+
+        // the actual data points are published in balanceByAngle()
+
       }    // if (abs(Balance.tilt)
 
       else // otherwise robot has such a big tilt that it should not be trying to balance
@@ -2075,23 +2106,15 @@ void checkBalanceState()
       { Balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
         
-        // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
-
-        // first, publish the column titles for the control parameters
-        publishMQTT("controlHeadings","p-gain,i-gain,d-gain,spd-lo,spd-hi,smooth,tmrIMU,trgt.ang,act.ang");
-
-        // then the values for the control parameters
-        publishMQTT("controlParameters",String(pid_p_gain) +","+ String(pid_i_gain) +","+ String(pid_d_gain) +","+ String(bot_slow)
-         +","+ String(bot_fast) +","+String(smoother) +","+String(tmrIMU) +","+ String(robotState.targetAngleDegrees)
-         +","+ String(Balance.activeAngle));
-
-        // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
-        publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,pid,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
-
-        // the actual data points are published in balanceByAngle()
 
         for (int t =1; t<= Balance.errHistCount; t++) {Balance.errHistory[t] = 0;}  // initialize remembered errors to zero
         Balance.errHistPtr = 1;                                             // next index in errHistory to be used is 1
+        // quick and dirty version of the above, dodging all the indexing
+        ang_err_1 = 0;     // start with no remembered error history
+        ang_err_2 = 0;
+        ang_err_3 = 0;
+        ang_err_4 = 0;
+        ang_err_5 = 0;
 
       }
       if(abs(Balance.tilt > Balance.maxAngleMotorActiveDegrees))    // if we're more than 30 degress from vertical...
@@ -2117,7 +2140,7 @@ void checkBalanceState()
 
 /**
  * @brief Set the robot's objective
- * @param objective String with human readabe objective for the robot to pursue
+ * @param objective String with human readable objective for the robot to pursue
  * ## Table of robot objectives 
  * | Item                     | Details                                                                                               |
  * |:-------------------------|:------------------------------------------------------------------------------------------------------|
