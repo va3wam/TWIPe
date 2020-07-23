@@ -12,6 +12,8 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-07-22 DE: -slow down tmrIMU from 6 to 11 milliseconds, so IMU's dmp has enough time to provide new data.
+ *                -revert to QOS 0
  * 2020-07-10 DE: -re-structure the structures, merging in most of the isolated by related values
  *                -make use of single motor ISR unconditional, optimizing out if statements
  *                -rename robot struct to attributes, & put non-changing attributes in it, including non-duplicated wheel stuff
@@ -328,7 +330,7 @@ static volatile motorControl right;           // Define a struct for right wheel
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU  6                 // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
+#define tmrIMU  11                // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -849,9 +851,10 @@ void onMqttUnsubscribe(uint16_t packetId)
 void publishMQTT(String topic, String msg)
 {
   runbit(12) ;
-  char tmp[NUMBER_OF_MILLI_DIGITS];                // a 10 digit string will work, but...
-  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);     // the 3rd arg to itoa is actually the numeric base. 10 requests a decimal number
-  String message = String(tmp) + "," + msg;
+//  char tmp[NUMBER_OF_MILLI_DIGITS];                // a 10 digit string will work, but...
+//  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);     // the 3rd arg to itoa is actually the numeric base. 10 requests a decimal number
+//  String message = String(tmp) + "," + msg;
+  String message = String(millis() ) + "," + msg;
   if (topic == "balanceHeadings")
   {
     uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
