@@ -12,8 +12,11 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-08-14 DE: -add MQTT commands getbalvar, gethealthvar and gethealthtel with command arrival timestamps. Need to move them from
+ *                 interrupting level to background
  * 2020-07-22 DE: -slow down tmrIMU from 6 to 11 milliseconds, so IMU's dmp has enough time to provide new data.
  *                -revert to QOS 0
+ *                - disable debug mode, eliminating serial I/O and interrupts, to reduce overhead & jitter
  * 2020-07-10 DE: -re-structure the structures, merging in most of the isolated by related values
  *                -make use of single motor ISR unconditional, optimizing out if statements
  *                -rename robot struct to attributes, & put non-changing attributes in it, including non-duplicated wheel stuff
@@ -172,7 +175,7 @@
 // Comes with Platform.io ?
 
 // Precompiler directives for debug output 
-#define DEBUG true                  // Turn debug tracing on/off
+#define DEBUG false                  // Turn debug tracing on/off
 #define DMP_TRACE false             // Set to TRUE or FALSE to toggle DMP memory read/write activity
 
 // Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
@@ -330,7 +333,7 @@ static volatile motorControl right;           // Define a struct for right wheel
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU  11                // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
+#define tmrIMU  12                // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -851,37 +854,38 @@ void onMqttUnsubscribe(uint16_t packetId)
 void publishMQTT(String topic, String msg)
 {
   runbit(12) ;
+  uint16_t packetIdPub1 = 0;                         // initialize itr to avoid compile errors if DEBUG == false
 //  char tmp[NUMBER_OF_MILLI_DIGITS];                // a 10 digit string will work, but...
 //  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);     // the 3rd arg to itoa is actually the numeric base. 10 requests a decimal number
 //  String message = String(tmp) + "," + msg;
   String message = String(millis() ) + "," + msg;
   if (topic == "balanceHeadings")
   {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to balance heading topic is ");
     AMDP_PRINTLN(packetIdPub1);
   } //if
   else if (topic == "balance")
   {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)balTopicMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    packetIdPub1 = mqttClient.publish((char *)balTopicMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to balance topic is ");
     AMDP_PRINTLN(packetIdPub1);
   } //if
   else if (topic == "metadata")
   {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)metTopicMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    packetIdPub1 = mqttClient.publish((char *)metTopicMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to metadata topic is ");
     AMDP_PRINTLN(packetIdPub1);
   } //else if
   else if (topic == "controlHeadings")
   {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    packetIdPub1 = mqttClient.publish((char *)cntlParmHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter heading topic is ");
     AMDP_PRINTLN(packetIdPub1);
   } //else if
   else if (topic == "controlParameters")
   {
-    uint16_t packetIdPub1 = mqttClient.publish((char *)cntlParmMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    packetIdPub1 = mqttClient.publish((char *)cntlParmMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
     AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter topic is ");
     AMDP_PRINTLN(packetIdPub1);
   } //else if
@@ -890,6 +894,7 @@ void publishMQTT(String topic, String msg)
     AMDP_PRINT("<publishMQTT> ERROR. Unknown MQTT topic tree - ");
     AMDP_PRINTLN(topic);
   } //else
+  if (DEBUG == false) Serial.println(packetIdPub1);    // otherwise compile errors if DEBUG = false
 } //publishMQTT()
 
 /**
@@ -949,7 +954,8 @@ void setControlParameter(String rCMD)
 
 /**
  * @brief publish current values of major control parameters, whether ot not they're changeable by MQTT
- * @note  called from processing of MQTT getvars command, and from checkBalanceState()
+ * @note  called from checkBalanceState()
+ * @note  no longer called from processing of MQTT getvars command, which excludes non MQTT changeable parameters
 =================================================================================================== */
 void publishParams()                  // publish the control parameters to MQTT
 {
@@ -1018,11 +1024,43 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   {
     AMDP_PRINTLN("<onMqttMessage> Received remote variable set command");
     setControlParameter(tmp);
-  } //if
-  else if(tmp.substring(0,6) == "getvar")
-  { AMDP_PRINTLN("<onMqttMessage> Received getvars remote request for control variables");
-    publishParams();          // use common routine with headings at start of telemetry
-  }
+  } //if... setvar
+
+// TODO need to review the MQTT topics used below. "controlParameters" probably inappropriate, 
+//      but other definitions have a different structure
+  else if(tmp.substring(0,9) == "getbalvar")
+  { AMDP_PRINTLN("<onMqttMessage> Received getbalvars remote request for modifyable balance control variables");
+    int getbalvarMillis = millis();    // capture time that command was received
+    publishMQTT("controlParameters",String(getbalvarMillis) +","+String(balance.pidPGain) +","+ String(balance.pidIGain) 
+    +","+ String(balance.pidICount) +","+ String(balance.pidDGain) 
+    +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother)  
+    +","+ String(balance.targetAngle) +","+ String(balance.activeAngle));
+  } // if... getbalvar
+
+  else if(tmp.substring(0,12) == "gethealthvar")
+  { AMDP_PRINTLN("<onMqttMessage> Received gethealthvars remote request for modifyable health control variables");
+    int gethealthvarMillis = millis();  // capture time that command was received
+    publishMQTT("controlParameters",String(gethealthvarMillis) +","+String("no health control variables currently implemented"));
+  } // if... gethealthvar
+
+  else if(tmp.substring(0,12) == "gethealthtel")
+  { AMDP_PRINTLN("<onMqttMessage> Received gethealthtel remote request for health telemetry values");
+    int gethealthtelMillis = millis();
+    publishMQTT("controlParameters",String(gethealthtelMillis) +","+String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
+    +","+ String(health.dmpFifoDataMissingCnt) +","+ String(health.wifiDropCnt) 
+    +","+ String(health.mqttDropCnt) +","+ String(health.unknownCmdCnt) +","+String(health.leftDRVfault)  
+    +","+ String(health.rightDRVfault) +","+ String(health.unknownSetvarCnt));
+/*
+  //TODO Put datapoint below to use
+  long riseTimeMax = 0;                     // Most microseconds it took for the signal rise event to happen
+  long riseTimeMin = 0;                     // Least microseconds it took for the signal rise event to happen
+  long fallTimeMax = 0;                     // Most microseconds it took for the signal fall event to happen
+  long fallTimeMin = 0;                     // Least microseconds it took for the signal fall event to happen
+  int delayTimeMax = 0;                     // Most microseconds it took for the delay time event to happen
+  int delayTimeMin = 0;                     // Least microseconds it took for the delay time event to happen
+*/
+  } // if... gethealthtel
+
 
   /*
   else if (tmp == "balTelCON")
