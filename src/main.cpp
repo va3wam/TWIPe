@@ -12,8 +12,14 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
- * 2020-08-14 DE: -add MQTT commands getbalvar, gethealthvar and gethealthtel with command arrival timestamps. Need to move them from
- *                 interrupting level to background
+ * 2020-09-23 DE: -discard changes since last merge, after backing up main and topics files
+ *                -define new MQTT topics as MQTTTop_<text string of topic>
+ *                -restructure publishMQTT()
+ *                -add documentation of telemetry balance fields in balanceByAngle
+ * 2020-08-13 DE: -correct dte in previous version description
+ *                -move the new MQTT commands into background, dispatched from loop() if command arrival timestamp is non-zero
+ * 2020-08-13 DE: -add MQTT commands getbalvar, gethealthvar and gethealthtel with command arrival timestamps. Need to move them from
+ *                 interrupting level to background (git merged)
  * 2020-07-22 DE: -slow down tmrIMU from 6 to 11 milliseconds, so IMU's dmp has enough time to provide new data.
  *                -revert to QOS 0
  *                - disable debug mode, eliminating serial I/O and interrupts, to reduce overhead & jitter
@@ -175,7 +181,7 @@
 // Comes with Platform.io ?
 
 // Precompiler directives for debug output 
-#define DEBUG false                  // Turn debug tracing on/off
+#define DEBUG true                  // Turn debug tracing on/off
 #define DMP_TRACE false             // Set to TRUE or FALSE to toggle DMP memory read/write activity
 
 // Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
@@ -293,18 +299,52 @@ char const* wifiEv[]               // WiFi event number translations
 
 // Define MQTT constants, classes and global variables.
 // Note that the MQTT broker used for testing this is Mosquitto running on a Raspberry Pi
-// Note sends balance telemetry data to <device name><telemetry/balance>
+// Note device name is prepended in MQTT publish routine
 // Note listens for commands on <device name><commands>
+
 const char* MQTT_BROKER_IP = "not-assigned"; // Need to make this a fixed IP address
+/*
+MQTT Activities are:
+  bal - balancing
+  nav - navigation
+  hth - health
+  cfg - configuration
+  sht - spreadsheet support
+
+MQTT dataflows are:
+  Tel - telemetry 
+  Ctl - reply to request to read control parameters 
+  Com - comments used in spread sheet analysis 
+
+Topics are an activity and a dataflow concatenated
+
+Commands for any activity are sent to the robot using the topic "commands"
+*/
+
+#define MQTTTop_balTel "/balTel"                      // outgoing balancing telemetry topic
+#define MQTTTop_balCtl "/balCtl"                      // outgoing reply to request to get balancing control params
+#define MQTTTop_navTel "/navTel"                      // outgoing navigation telemetry topic
+#define MQTTTop_navCtl "/navCtl"                      // outgoing reply to request to get navigation control params
+#define MQTTTop_hthTel "/hthTel"                      // outgoing health telemetry topic
+#define MQTTTop_hthCtl "/hthCtl"                      // outgoing reply to request to get health control params
+#define MQTTTop_cfgCtl "/cfgCtl"                      // outgoing reply to request to get configuration control params
+#define MQTTTop_shtCom "/shtCom"                      // outgoing spreadsheet comment topic
+
+#define MQTTTop_commands "/commands"                    // incoming commands from MQTT topic
+
+
 #define MQTT_BROKER_PORT 1883 // Use 8883 for SSL
 #define MQTT_USERNAME "NULL" // Not used at this time. To do: secure MQTT broker
 #define MQTT_KEY "NULL" // Not used at this time. To do: secure MQTT broker
+/* old topics will be reworked to use new topics above
 #define MQTT_IN_CMD "/commands" // Topic branch for incoming remote commands
-#define MQTT_TEL_BAL_HEAD "/telemetry/balanceHeadings" // Topic tree for outgoing balance telemetry heading data
-#define MQTT_TEL_BAL "/telemetry/balance" // Topic tree for outgoing balance telemetry data
-#define MQTT_METADATA "/metadata" // Topic tree for outgoing metadata about the robot
-#define MQTT_CNTL_PARM_HEAD "/controlHeadings" // Topic tree for outgoing metadata about the robot
+#define MQTT_COMMENT "/spreadsheet/comment" // Topic tree for outgoing balance telemetry heading data
+#define MQTT_BAL_TEL "/balance/telemetry" // Topic tree for outgoing balance telemetry data
+#define MQTT_BAL_REPLY "balancing/replyControlParams"   // for responses to MQTT get control params commands
+#define MQTT_HEALTH_REPLY "/health/replyControlParams" // Topic tree for outgoing metadata about the robot
+// #define MQTT_CNTL_PARM_HEAD "/controlHeadings" // Topic tree for outgoing metadata about the robot
 #define MQTT_CNTL_PARM "/controlParameters" // Topic tree for outgoing metadata about the robot
+*/
 // #define QOS1 1 // Quality of service level 1 ensures at least one copy of messages are delivered
 AsyncMqttClient mqttClient;
 TimerHandle_t mqttReconnectTimer;
@@ -350,7 +390,7 @@ unsigned long telMilli3;          // timestamp used for telemetry reporting
 unsigned long telMilli4;          // timestamp used for telemetry reporting
 unsigned long telMilli5;          // timestamp used for telemetry reporting
 
-unsigned long tm_IMUdelta;        // telemetry value: how long between goIMU calls. should be tmrIMU
+unsigned long tm_IMUdelta;        // telemetry value: measured time between goIMU calls. should be tmrIMU
 unsigned long tm_readFIFO;        // telemetry value: how long the mpu.dmpGetCurrentFIFOPacket(fifoBuffer) execution took
 unsigned long tm_dmpGet;          // telemetry value: how long the dmpGet* calls after above call took
 unsigned long tm_allReadIMU;      // telemetry value: how long the readIMU execution took
@@ -700,10 +740,11 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     Serial.println(myMACaddress);
     wifi_connected = true;
     AMDP_PRINTLN("<processWiFiEvent> Use MAC address to create MQTT topic trees...");
-    cmdTopicMQTT = myHostName + MQTT_IN_CMD;   // Define variable with the full name of the incoming command topic
-    balTopicHeadingMQTT = myHostName + MQTT_TEL_BAL_HEAD; // Define variabe with the full name of the outgoing balance telemetry heading topic
-    balTopicMQTT = myHostName + MQTT_TEL_BAL;  // Define variabe with the full name of the outgoing balance telemetry topic
-    metTopicMQTT = myHostName + MQTT_METADATA; // Define variable with full name of the outgoiong metadata topic
+    cmdTopicMQTT = myHostName + MQTTTop_commands;   // Define variable with the full name of the incoming command topic
+/*    not sure if we need definitions below
+    balTopicHeadingMQTT = myHostName + MQTT_COMMENT; // Define variabe with the full name of the outgoing balance telemetry heading topic
+    balTopicMQTT = myHostName + MQTT_BAL_TEL;  // Define variabe with the full name of the outgoing balance telemetry topic
+    metTopicMQTT = myHostName + MQTT_HEALTH_REPLY; // Define variable with full name of the outgoiong metadata topic
     cntlParmHeadingMQTT = myHostName + MQTT_CNTL_PARM_HEAD;  // Define variabe with the full name of the outgoing balance telemetry topic
     cntlParmMQTT = myHostName + MQTT_CNTL_PARM;  // Define variabe with the full name of the outgoing balance telemetry topic
 
@@ -719,6 +760,7 @@ void processWifiEvent() // called fron loop() to handle event ID stored in WifiL
     AMDP_PRINTLN(cntlParmHeadingMQTT);
     AMDP_PRINT("<processWiFiEvent> cntlParmMQTT = ");
     AMDP_PRINTLN(cntlParmMQTT);
+    */
     connectToMqtt();
     break;
   } //case
@@ -858,6 +900,7 @@ void publishMQTT(String topic, String msg)
 //  char tmp[NUMBER_OF_MILLI_DIGITS];                // a 10 digit string will work, but...
 //  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);     // the 3rd arg to itoa is actually the numeric base. 10 requests a decimal number
 //  String message = String(tmp) + "," + msg;
+/* save code I'm about to hack...
   String message = String(millis() ) + "," + msg;
   if (topic == "balanceHeadings")
   {
@@ -894,6 +937,15 @@ void publishMQTT(String topic, String msg)
     AMDP_PRINT("<publishMQTT> ERROR. Unknown MQTT topic tree - ");
     AMDP_PRINTLN(topic);
   } //else
+  */ //end of section being replaced
+
+  String message = String(millis() ) + "," + msg;           // prepend timestamp to message
+   String mqttPrefix = String(myHostName) + String(topic);  // prepend robot name to MQTT topic
+// do the publish, using topic that was argument to publish routine
+    packetIdPub1 = mqttClient.publish((char *)mqttPrefix.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
+    AMDP_PRINT2("<publishMQTT> publish for for topic: ",topic);
+    AMDP_PRINT2("<publishMQTT> PacketID for topic is ",packetIdPub1 );
+   
   if (DEBUG == false) Serial.println(packetIdPub1);    // otherwise compile errors if DEBUG = false
 } //publishMQTT()
 
@@ -943,13 +995,7 @@ void setControlParameter(String rCMD)
     AMDP_PRINTLN("<setControlParameter> Unknown variable. Ignoring setvar command");
     health.unknownSetvarCnt++; // Increment counter of invalid setvar variable names
   } //else
-  /*    don't need this after every lone of am MQTT-fx script
-  // Send updated control parameter message out to sync remote clients
-  publishMQTT("controlParameters",String(balance.pidPGain) +","+ String(balance.pidIGain) +","+ String(balance.pidDGain)
-         +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother)
-         +","+String(tmrIMU) +","+ String(balance.targetAngle)
-         +","+ String(balance.activeAngle));
-  */
+
 } //setControlParameter()
 
 /**
@@ -959,7 +1005,7 @@ void setControlParameter(String rCMD)
 =================================================================================================== */
 void publishParams()                  // publish the control parameters to MQTT
 {
-        publishMQTT("controlParameters",String(balance.pidPGain) +","+ String(balance.pidIGain) 
+        publishMQTT(MQTTTop_shtCom,String(balance.pidPGain) +","+ String(balance.pidIGain) 
         +","+ String(balance.pidICount) +","+ String(balance.pidDGain) 
         +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother) +","+String(tmrIMU) 
         +","+ String(balance.targetAngle) +","+ String(balance.activeAngle)+","+ String(MQTTQos));
@@ -1031,7 +1077,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   else if(tmp.substring(0,9) == "getbalvar")
   { AMDP_PRINTLN("<onMqttMessage> Received getbalvars remote request for modifyable balance control variables");
     int getbalvarMillis = millis();    // capture time that command was received
-    publishMQTT("controlParameters",String(getbalvarMillis) +","+String(balance.pidPGain) +","+ String(balance.pidIGain) 
+    publishMQTT(MQTTTop_balCtl,String(getbalvarMillis) +","+String(balance.pidPGain) +","+ String(balance.pidIGain) 
     +","+ String(balance.pidICount) +","+ String(balance.pidDGain) 
     +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother)  
     +","+ String(balance.targetAngle) +","+ String(balance.activeAngle));
@@ -1040,13 +1086,13 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   else if(tmp.substring(0,12) == "gethealthvar")
   { AMDP_PRINTLN("<onMqttMessage> Received gethealthvars remote request for modifyable health control variables");
     int gethealthvarMillis = millis();  // capture time that command was received
-    publishMQTT("controlParameters",String(gethealthvarMillis) +","+String("no health control variables currently implemented"));
+    publishMQTT(MQTTTop_hthCtl,String(gethealthvarMillis) +","+String("no health control variables currently implemented"));
   } // if... gethealthvar
 
   else if(tmp.substring(0,12) == "gethealthtel")
   { AMDP_PRINTLN("<onMqttMessage> Received gethealthtel remote request for health telemetry values");
     int gethealthtelMillis = millis();
-    publishMQTT("controlParameters",String(gethealthtelMillis) +","+String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
+    publishMQTT(MQTTTop_hthTel,String(gethealthtelMillis) +","+String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
     +","+ String(health.dmpFifoDataMissingCnt) +","+ String(health.wifiDropCnt) 
     +","+ String(health.mqttDropCnt) +","+ String(health.unknownCmdCnt) +","+String(health.leftDRVfault)  
     +","+ String(health.rightDRVfault) +","+ String(health.unknownSetvarCnt));
@@ -1477,15 +1523,39 @@ void balanceByAngle()
   itoa(runFlagWord,flagsInHex,16);    // convert flags to hex string
   runFlagWord = 0 ;                   // clear flags ASAP, so new routines are seen
 
-//"IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,angErr,raw pid,pid,Isum,Dslope,MotorTicks,runflags,R.O.time,MQpubCnt,uMDtime");
+/*
+   Layout of balance telemetry. 
+   Sample msg:  TwipeB4E62D9EA8F9/balTel 159633,12,1,0,1,2,-0.84,-1.34,-222.57,-222.57,-4.33,-0.01,-521,8001000,0,0,0
+   Fields:
+1  Robot identifier, ending in MAC address then a slash separator
+2  MQTT topic "balTel" with space separator
+3  timestamp, in millis() for message publication, followed by a comma separator, like remaining fields
+4  tm_IMUdelta     telemetry value: measured time (millis()) between goIMU calls. should equal tmrIMU
+5  tm_readFIFO     telemetry value: how long the mpu.dmpGetCurrentFIFOPacket(fifoBuffer) execution took
+6  tm_dmpGet       telemetry value: how long the dmpGet* calls after above call took
+7  tm_allReadIMU   telemetry value: how long the readIMU execution took
+8  tm_oldbalByAng  telemetry value: how long the PREVIOUS balanceByAngle took
+9  balance.tilt    forward/backward angle of robot, in degrees, positive is leaning forward, 0 is vertical
+10 balance.angleErr difference between current angle (tilt) and desired angle (targetAngle)
+11 balance.pidRaw  calculated balance angle PID value before range checking
+12 balance.pid     calculated balance angle PID value after range checking (400<pid<400)
+13 balance.pidISum The I part if PID 
+14 balance.pidDSlope  The D part of PID
+15 balance.motorTicks The number of 20usec ticks before next step of the stepper motors by interrupt level
+16 flagsinhex      bit encoded indication of which routines have executed since last readIMU cycle
+17 tm_ROLEDtime    time spent in the routine that updates the right OLED since last readIMU cycle
+18 tm_MQpubCnt     the number of times the MQTTpublish reoutine was executed since last readIMU cycle
+19 tm_uMDtime      telemetry measure: time spent in updateMetadata() since last readIMU cycle
+
+*/
 
   String tmp = String(tm_IMUdelta) +"," + String(tm_readFIFO) + "," + String(tm_dmpGet) + "," + String(tm_allReadIMU)
    + "," + String(tm_OldbalByAng) + "," + String(balance.tilt) + "," + String(balance.angleErr) + "," + String(balance.pidRaw)
    + "," + String(balance.pid) + "," + String(balance.pidISum) + "," + String(balance.pidDSlope) + "," + String(balance.motorTicks) 
    + "," + flagsInHex  +","+ String(tm_ROLEDtime) +","+ String(tm_MQpubCnt) +","+ String(tm_uMDtime);
 
-   tm_ROLEDtime = 0;                  // don't leave old time hanging around in case routine doesn't run soon.
-   tm_LOLEDtime = 0;
+   tm_ROLEDtime = 0;         // don't leave old time hanging around in case routine doesn't run soon.
+   tm_LOLEDtime = 0;         // reset variables that are counters spanning execuitions of readIMU...
    tm_uMDtime = 0;
    tm_IMUdelta = 0;
    tm_readFIFO = 0;
@@ -1502,7 +1572,7 @@ void balanceByAngle()
     }    //if
     else // Otherwise assume we are to send the data to the MQTT broker
     {
-      publishMQTT("balance", tmp);              // publish data point string built above.
+      publishMQTT(MQTTTop_balTel, tmp);              // publish data point string built above.
     } //else
   }   //if
 } // balanceByAngle
@@ -1552,7 +1622,7 @@ void updateMetaData()
     }    //if
     else // Otherwise assume we are to send the data to the MQTT broker
     {
-      publishMQTT("metadata", tmp);
+      publishMQTT(MQTTTop_hthTel, tmp);
     }                                  //else
   }                                    //if
   goMETADATA = millis() + tmrMETADATA; // Reset SERIAL update target time
@@ -1994,13 +2064,13 @@ void checkBalanceState()
         // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
 
         // first, publish the column titles for the control parameters
-        publishMQTT("controlHeadings","PGain,IGain,ICnt,DGain,slow Tks,fast Tks,smooth,tmrIMU,trgt ang,act ang,QOS");
+        publishMQTT(MQTTTop_shtCom,"PGain,IGain,ICnt,DGain,slow Tks,fast Tks,smooth,tmrIMU,trgt ang,act ang,QOS");
 
         // then the values for the control parameters
         publishParams();                  // use same routine as MQTT getvars command uses
 
         // then the column titles for the repeated data points that are published every time we read the IMU and do balancing calculations
-        publishMQTT("balanceHeadings", "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,angErr,raw pid,pid,Isum,Dslope,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
+        publishMQTT(MQTTTop_shtCom, "IMUdelta,readFIFO,dmpGet,AllReadIMU,OldbalByAng,tilt,angErr,raw pid,pid,Isum,Dslope,MotorInt,runflags,R.O.time,MQpubCnt,uMDtime");
 
         // the actual data points are published in balanceByAngle()
 
