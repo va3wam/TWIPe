@@ -12,6 +12,8 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-10-16 DE: null commit to flush changes to origin
+ * 2020-10-16 DE: PID calcs: use average of historical values for I, rather than sum, and use targetAngle in all vertical checks
  * 2020-10-07 DE: change wheel speed control so pid is proportionally mapped to ground speed, rather than motorInt              motorInt that's proportional.
  * 2020-09-30 DE: Milestone: balanced reliably for minutes on carpet with smaller PID parameters
  *                PID gains (5,0,0), slow,fast(800,300), smother=0, target angle (per bot), active angle =1
@@ -1459,12 +1461,11 @@ void balanceByAngle()
       {   balance.pidISum += balance.errHistory[t-1];                // element 0 is current error, element 1 is previous error....
       }
     }
-    balance.pid += balance.pidIGain * balance.pidISum;      // multiply it by its gain & add to overall pid
-  
+    balance.pid += balance.pidIGain * balance.pidISum/balance.pidICount; // add average of stored I values times gain
+
     for(int t = balance.pidICount; t >= 1; t-- )
     {   balance.errHistory[t] = balance.errHistory[t-1];    //shuffle remembered values so we have most recent bunch
     }
-    
     // now calculate the derivative, which is slope between current and last errors (using errors includes target angle)
     // slope is (delta y) / (delta x), in our case,  (previous error - current error) / (tmrIMU mSec)
     balance.pidDSlope = 0;                  // guess that we won't have enough points to figure slope
@@ -2079,7 +2080,7 @@ void checkBalanceState()
   {
     case bs_sleep:
     {
-      if( abs(balance.tilt) < balance.maxAngleMotorActive)  // if robot is within 30 degrees of vertical
+      if( abs(balance.tilt-balance.targetAngle) < balance.maxAngleMotorActive)  // if robot is within 30 degrees of vertical
       {
         if (digitalRead(gp_DRV1_ENA) == HIGH) // If motor is currently turned off
         {
@@ -2121,12 +2122,12 @@ void checkBalanceState()
     } // case bs_sleep
 
     case bs_awake:
-    { if(abs(balance.tilt) <= balance.activeAngle)      // are we almost vertical?
+    { if(abs(balance.tilt-balance.targetAngle) <= balance.activeAngle)      // are we almost vertical?
       { balance.state = bs_active;              // yes, so start trying to balance
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_active");
         for (int t =1; t<= balance.pidICount; t++) {balance.errHistory[t] = 0;}  // initialize remembered errors to zero
       }
-      if(abs(balance.tilt > balance.maxAngleMotorActive))    // if we're more than 30 degress from vertical...
+      if(abs(-balance.targetAngle > balance.maxAngleMotorActive))    // if we're more than 30 degress from vertical...
       { balance.state = bs_sleep;                                   // fall back to sleep
         AMDP_PRINTLN("<checkBalanceState> falling back to bs_sleep state");
       }
@@ -2134,7 +2135,7 @@ void checkBalanceState()
 
     } // case bs_awake
     case bs_active:
-    { if(abs(balance.tilt) >= balance.maxAngleMotorActive)       // have we gone more than 30 degrees from vertical?
+    { if(abs(balance.tilt-balance.targetAngle) >= balance.maxAngleMotorActive)       // have we gone more than 30 degrees from vertical?
       { balance.state = bs_sleep;    // abort balancing efforts, and go back to waiting for less than 30 degrees tilt
         left.tickSetting = 0;       // stop the motors
         right.tickSetting = 0;
