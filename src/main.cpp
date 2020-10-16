@@ -12,6 +12,10 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-10-07 DE: change wheel speed control so pid is proportionally mapped to ground speed, rather than motorInt              motorInt that's proportional.
+ * 2020-09-30 DE: Milestone: balanced reliably for minutes on carpet with smaller PID parameters
+ *                PID gains (5,0,0), slow,fast(800,300), smother=0, target angle (per bot), active angle =1
+ *                -fix bug where active angle doesn't consider target angle
  * 2020-09-23 DE: -discard changes since last merge, after backing up main and topics files
  *                -define new MQTT topics as MQTTTop_<text string of topic>
  *                -restructure publishMQTT()
@@ -181,7 +185,7 @@
 // Comes with Platform.io ?
 
 // Precompiler directives for debug output 
-#define DEBUG true                  // Turn debug tracing on/off
+#define DEBUG false                  // Turn debug tracing on/off
 #define DMP_TRACE false             // Set to TRUE or FALSE to toggle DMP memory read/write activity
 
 // Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
@@ -358,6 +362,7 @@ String cntlParmMQTT = "NOTHING"; // Full path to outgoing control parameter topi
 // Define global motor control variables and structures.
 #define motorISRus 20               // Number of microseconds between motor ISR calls
 hw_timer_t *motorTimer = NULL;      // Pointer to motor ISR
+float motorPrecalc = 0;             // holds precalculation to optimize balanceByAngle's calculation of motorInt
 
 // stepperMotor struct definition, one per wheel.  ==================================================
 typedef struct
@@ -943,8 +948,8 @@ void publishMQTT(String topic, String msg)
    String mqttPrefix = String(myHostName) + String(topic);  // prepend robot name to MQTT topic
 // do the publish, using topic that was argument to publish routine
     packetIdPub1 = mqttClient.publish((char *)mqttPrefix.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT2("<publishMQTT> publish for for topic: ",topic);
-    AMDP_PRINT2("<publishMQTT> PacketID for topic is ",packetIdPub1 );
+    AMDP_PRINT2("<publishMQTT> publish for topic: ",topic);
+    AMDP_PRINT2LN("<publishMQTT> PacketID for topic is ",packetIdPub1 );
    
   if (DEBUG == false) Serial.println(packetIdPub1);    // otherwise compile errors if DEBUG = false
 } //publishMQTT()
@@ -1473,15 +1478,34 @@ void balanceByAngle()
     if(balance.pid >  400) balance.pid = 400;               // range limit pid
     if(balance.pid < -400) balance.pid = -400;
     if(abs(balance.pid) < 5) balance.pid = 0;              // create a dead band to stop motors when robot is balanced
-
+/*
     if(balance.pid > 0)
     {  balance.motorTicks = int(balance.slowTicks - (balance.pid/400)*(balance.slowTicks - balance.fastTicks) ) ;  
     }                                      // motorTicks is speed interval in timer ticks
     if(balance.pid < 0)
     {  balance.motorTicks = int( -1*balance.slowTicks - (balance.pid/400)*(balance.slowTicks - balance.fastTicks) ) ;
     }
-    if(balance.pid == 0) balance.motorTicks = 0 ;
+  */
 
+float distancePerTick = 3.1415926 * attribute.wheelDiameter / attribute.stepsPerRev;
+float minGroundSpeed = distancePerTick / ( 20 * .000001 * balance.slowTicks);
+float maxGroundSpeed = distancePerTick / ( 20 * .000001 * balance.fastTicks);
+float groundSpeed = 0;  // setting value avoids compiler nagging
+
+if(balance.pid > 0) { groundSpeed = ((balance.pid-5)/395) * (maxGroundSpeed - minGroundSpeed) + minGroundSpeed; }
+if(balance.pid < 0) { groundSpeed = ((balance.pid+5)/395) * (maxGroundSpeed - minGroundSpeed) - minGroundSpeed; }
+if(balance.pid == 0 || groundSpeed == 0) { balance.motorTicks = 0; }
+// else { balance.motorTicks = int( distancePerTick / groundSpeed ); }
+else { balance.motorTicks = int( distancePerTick / groundSpeed / .000020 ); }
+
+Serial.print(">");
+Serial.print(balance.tilt); Serial.print(", ");
+Serial.print(balance.pid); Serial.print(", ");
+Serial.print(groundSpeed); Serial.print(", ");
+
+// TODO retrofit distancePerTick, groundSpeed, minGroundSpeed, maxGroundSpeed etc, into structures
+
+Serial.println(balance.motorTicks); 
         // experimental  motor speed change smoothing
     // smoother is a variable, and the control parameter - smoother == 0 means don't smooth
     if(balance.smoother != 0)                       // if smoothing is enabled, do it
@@ -2035,6 +2059,13 @@ void setupDriverMotors()
     AMDP_PRINTLN("<setupDriverMotors> Monitor left & right DRV8825 drivers for faults");
     attachInterrupt(gp_DRV2_FAULT, leftDRV8825fault, FALLING);
     attachInterrupt(gp_DRV1_FAULT, rightDRV8825fault, FALLING);            // and specify ISR to call
+
+    // do precalculations to reduce inner loop computation for motorInt in balanceByAngle()
+    // seE explanation in balanceByAngle()
+    float factor = (157079.633 * attribute.wheelDiameter / attribute.stepsPerRev);
+    motorPrecalc = (factor * 395) / (factor/balance.fastTicks - factor/balance.slowTicks);
+    // can now calculate necessary motorInt = motorPrecalc / (pid -5)
+
 } //setupDriverMotors()
 
 /**
@@ -2179,7 +2210,7 @@ void setup()
   setupIMU();                            // Set up IMU communication
    updateLeftOLED("setupDriverMotors");  // display setup routine we are about to execute in bot's right eye
   setupDriverMotors();                   // Set up the Stepper motors used to drive the robot motion
-  updateLeftOLEDNetInfo();             // aftersetup's done, show IP, MAC, AccessPoint and Hostname in left OLED
+    updateLeftOLEDNetInfo();             // aftersetup's done, show IP, MAC, AccessPoint and Hostname in left OLED
   goOLED = millis() + tmrOLED;         // Reset OLED update counter
   goLED = millis() + tmrLED;           // Reset LED flashing counter
   goIMU = millis() + tmrIMU;           // Reset IMU update counter
