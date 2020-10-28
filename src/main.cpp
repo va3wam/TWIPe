@@ -3,7 +3,7 @@
  * @author va3wam
  * @brief TWIPe robot firmware 
  * @details Handles balancing the robot by reading MPU6050 IMU data, using PID to control a pair of open loop bi-polar stepper motors 
- *          via DRV8826 motor drivers, and communicating data and recieving commands through the WiFi interface using the MQTT 
+ *          via DRV8826 motor drivers, and communicating data and receiving commands through the WiFi interface using the MQTT 
  *          protocol via an MQTT broker running on a raspberry Pi 
  * @version 0.0.22
  * @date 2020-04-25
@@ -12,6 +12,11 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-10-27 DE: -expand possible PID error history to 200 past values, still controlled by balance.pidICount
+ *                -added Evt (event) MQTT dataflow, and hthEvt MQTT topic to allow bot to report asynchronous events,
+ *                 using publishEvent() routine and add a test event just before spreadsheet titles come out
+ *                -make the tmrIMU parameter a controllable run time variable rather than a compile time constant, and report
+ *                 it in MQTT getBalVars command output
  * 2020-10-16 DE: null commit to flush changes to origin
  * 2020-10-16 DE: PID calcs: use average of historical values for I, rather than sum, and use targetAngle in all vertical checks
  * 2020-10-07 DE: change wheel speed control so pid is proportionally mapped to ground speed, rather than motorInt              motorInt that's proportional.
@@ -321,6 +326,7 @@ MQTT dataflows are:
   Tel - telemetry 
   Ctl - reply to request to read control parameters 
   Com - comments used in spread sheet analysis 
+  Evt - reporting occurrence of an asynchronous event woth noting
 
 Topics are an activity and a dataflow concatenated
 
@@ -380,7 +386,8 @@ static volatile motorControl right;           // Define a struct for right wheel
 
 // Define global control variables.
 #define NUMBER_OF_MILLI_DIGITS 10 // Millis() uses unsigned longs (32 bit). Max value is 10 digits (4294967296ms or 49 days, 17 hours)
-#define tmrIMU  12                // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
+// change tmrIMU to be a variable in balance struct so we can change it on the fly
+// #define tmrIMU  12                // Milliseconds to wait between reading data to IMU over I2C, and doing balancing calculations
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
@@ -508,7 +515,8 @@ typedef struct
   int motorTicks;              // motor speed, i.e. interval between steps in timer ticks
   int lastSpeed = 0;           // memory for above method using smoother
   float angleErr = 0;          // difference between current angle and target angle
-  float errHistory[20] ;                     //  remembered angle errors for calculating I in PID
+  int tmrIMU = 12;             // number of milliseconds between calls to readIMU, and balance calculations
+  float errHistory[200] ;                    //  remembered angle errors for calculating I in PID
   float centreOfMassError = attribute.heightCOM; // Distance in inches robot's Centre Of Mass (COM) is away from target
   float distancePercentage;                  // Percentage of COM height away from target
   int steps;                                 // Number of steps that it will take to get to target angle
@@ -885,6 +893,9 @@ void onMqttUnsubscribe(uint16_t packetId)
   AMDP_PRINTLN(packetId);
 } //onMqttUnsubscribe()
 
+
+
+
 /**
  * @brief Publish a message to the specified MQTT broker topic tree
  * @param topic The topic tree to publish the messge to
@@ -904,47 +915,6 @@ void publishMQTT(String topic, String msg)
 {
   runbit(12) ;
   uint16_t packetIdPub1 = 0;                         // initialize itr to avoid compile errors if DEBUG == false
-//  char tmp[NUMBER_OF_MILLI_DIGITS];                // a 10 digit string will work, but...
-//  itoa(millis(), tmp, NUMBER_OF_MILLI_DIGITS);     // the 3rd arg to itoa is actually the numeric base. 10 requests a decimal number
-//  String message = String(tmp) + "," + msg;
-/* save code I'm about to hack...
-  String message = String(millis() ) + "," + msg;
-  if (topic == "balanceHeadings")
-  {
-    packetIdPub1 = mqttClient.publish((char *)balTopicHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to balance heading topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //if
-  else if (topic == "balance")
-  {
-    packetIdPub1 = mqttClient.publish((char *)balTopicMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to balance topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //if
-  else if (topic == "metadata")
-  {
-    packetIdPub1 = mqttClient.publish((char *)metTopicMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to metadata topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //else if
-  else if (topic == "controlHeadings")
-  {
-    packetIdPub1 = mqttClient.publish((char *)cntlParmHeadingMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter heading topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //else if
-  else if (topic == "controlParameters")
-  {
-    packetIdPub1 = mqttClient.publish((char *)cntlParmMQTT.c_str(), MQTTQos, false, (char *)message.c_str()); // QOS 0-2, retain t/f
-    AMDP_PRINT("<publishMQTT> PacketID for publish to control parameter topic is ");
-    AMDP_PRINTLN(packetIdPub1);
-  } //else if
-  else
-  {
-    AMDP_PRINT("<publishMQTT> ERROR. Unknown MQTT topic tree - ");
-    AMDP_PRINTLN(topic);
-  } //else
-  */ //end of section being replaced
 
   String message = String(millis() ) + "," + msg;           // prepend timestamp to message
    String mqttPrefix = String(myHostName) + String(topic);  // prepend robot name to MQTT topic
@@ -955,6 +925,35 @@ void publishMQTT(String topic, String msg)
    
   if (DEBUG == false) Serial.println(packetIdPub1);    // otherwise compile errors if DEBUG = false
 } //publishMQTT()
+
+
+//    publishMQTT(MQTTTop_shtCom,String(balance.pidPGain) +","+ String(balance.pidIGain) 
+//  void publishMQTT(String topic, String msg)
+/*
+The general format of a published MQTT message is
+   bot-ID "/" topic space timestamp comma message
+
+for an event...
+   topic = "hthEvt"
+   message = evtId,evtSev,evtMsg
+where evtId takes values
+  0   test event
+  1   "should not get here" event
+      evtMsg is "routine-name, event-number-routine"
+  2   faults seen on motor controllers in last 5 seconds
+      evtMsg is "counter for last 5 seconds"
+  3   ... to be defined ...
+
+and ecvtSev takes the values
+  0   Info:    normal operational event information
+  1   Warning: of unusual or unexpected condition event
+  3   Error:   circumstances that put continued operation of bot at risk   
+
+*/
+void publishEvent(int evtId, int evtSev, String evtMsg)
+{  publishMQTT("/hthEvt",String(evtId) +","+ String(evtSev) +","+String(evtMsg));
+}
+
 
 /**
  * @brief Set a control parameter variable to the new value specified in the remote setvar command 
@@ -987,6 +986,8 @@ void setControlParameter(String rCMD)
   else if(varName == "balance.smoother") balance.smoother = varValue.toFloat();
   else if(varName == "balance.targetAngle") balance.targetAngle = varValue.toFloat();
   else if(varName == "balance.activeAngle") balance.activeAngle = varValue.toFloat();
+  else if(varName == "balance.tmrIMU") balance.tmrIMU = varValue.toInt();   // be very careful if you change this
+  
 
 // use some special pseudo variables to handle variables with non-numeric values
   else if (varName == "balTelOFF") balTelMsg.active = false;                                         // value irrelevant
@@ -1012,9 +1013,10 @@ void setControlParameter(String rCMD)
 =================================================================================================== */
 void publishParams()                  // publish the control parameters to MQTT
 {
+
         publishMQTT(MQTTTop_shtCom,String(balance.pidPGain) +","+ String(balance.pidIGain) 
         +","+ String(balance.pidICount) +","+ String(balance.pidDGain) 
-        +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother) +","+String(tmrIMU) 
+        +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother) +","+String(balance.tmrIMU) 
         +","+ String(balance.targetAngle) +","+ String(balance.activeAngle)+","+ String(MQTTQos));
 }
 
@@ -1087,7 +1089,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
     publishMQTT(MQTTTop_balCtl,String(getbalvarMillis) +","+String(balance.pidPGain) +","+ String(balance.pidIGain) 
     +","+ String(balance.pidICount) +","+ String(balance.pidDGain) 
     +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother)  
-    +","+ String(balance.targetAngle) +","+ String(balance.activeAngle));
+    +","+ String(balance.targetAngle) +","+ String(balance.activeAngle)+","+ String(balance.tmrIMU)  );
   } // if... getbalvar
 
   else if(tmp.substring(0,12) == "gethealthvar")
@@ -1470,7 +1472,7 @@ void balanceByAngle()
     // slope is (delta y) / (delta x), in our case,  (previous error - current error) / (tmrIMU mSec)
     balance.pidDSlope = 0;                  // guess that we won't have enough points to figure slope
     if(balance.pidICount >= 2 )             // but if we do have at least 2 points...
-    {  balance.pidDSlope = ( balance.errHistory[2] - balance.angleErr ) / tmrIMU;  // calculate the slope
+    {  balance.pidDSlope = ( balance.errHistory[2] - balance.angleErr ) / balance.tmrIMU;  // calculate the slope
     }
     // and add that slope, times its gain parameter, to the overall PID
     balance.pid += balance.pidDGain * balance.pidDSlope;
@@ -1988,12 +1990,11 @@ boolean readIMU()
   {
     health.dmpFifoDataMissingCnt++; // Track how many times the FIFO pin goes high but the buffer is empty
   }                                   //else
-  // goIMU = millis() + tmrIMU;          // Reset IMU update counter. do this in loop() instead
   return rCode;
 } // readIMU()
 
 /**    
- * @brief Create FreeRTOS timers that run callback functions in their own seperate FreeRTOS threads. 
+ * @brief Create FreeRTOS timers that run callback functions in their own separate FreeRTOS threads. 
  * @note For details abut FreeRTOS timers see https://www.freertos.org/FreeRTOS-timers-xTimerCreate.html
  * @note Timers are created but are not started at this point. xTimerStart is used later to start them.
 =================================================================================================== */
@@ -2092,6 +2093,10 @@ void checkBalanceState()
         AMDP_PRINTLN( "<checkBalanceState> entering state bs_awake");
         // update left eye with network info that is now available and static
         updateLeftOLEDNetInfo();        // put IP, MAC, Accesspoint & MQTT hostname into left eye.
+
+        // do a test event publish before the stuff that goes into the spreadsheet to avoid messing it up
+
+        publishEvent(0,0,"test-event");
 
         // publish preliminary info into the MQTT balance telemetry log to help with telemetry interpretation before we get busy
 
@@ -2214,7 +2219,7 @@ void setup()
     updateLeftOLEDNetInfo();             // aftersetup's done, show IP, MAC, AccessPoint and Hostname in left OLED
   goOLED = millis() + tmrOLED;         // Reset OLED update counter
   goLED = millis() + tmrLED;           // Reset LED flashing counter
-  goIMU = millis() + tmrIMU;           // Reset IMU update counter
+  goIMU = millis() + balance.tmrIMU;   // Reset IMU update counter
   goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
   cntLoop = 0;                         // Reset counter that tracks how many iterations of loop() have occurred
   updateLeftOLEDNetInfo();             // output network info once since it's stable, not repeatedly
@@ -2230,7 +2235,7 @@ void loop()
 
   if (millis() >= goIMU)                  // use "else if" to only allow one routine to run per loop()...
   {                                       // which increases frequency of checks for goIMU readiness
-    goIMU = millis() + tmrIMU;            // Reset IMU update counter right away.
+    goIMU = millis() + balance.tmrIMU;            // Reset IMU update counter right away.
     holdMilli1 = telMilli1;               // remember previous startime to calculate delta time for goIMU starts
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
     tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
