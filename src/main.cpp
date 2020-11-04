@@ -192,7 +192,7 @@
 // Comes with Platform.io ?
 
 // Precompiler directives for debug output 
-#define DEBUG false                  // Turn debug tracing on/off
+#define DEBUG true                  // Turn debug tracing on/off
 #define DMP_TRACE false             // Set to TRUE or FALSE to toggle DMP memory read/write activity
 
 // Create debug macros that mirror the standard c++ print functions. Use the pre-processor variable 
@@ -1883,16 +1883,17 @@ void cfgByMAC()
     attribute.heightCOM = 5;
     attribute.wheelDiameter = 3.937008; // 100mm in inches
     attribute.stepsPerRev = 200;
-    balance.slowTicks=600;
-    balance.fastTicks=300;
+    balance.slowTicks=800; //600
+    balance.fastTicks=300; //300
     balance.directionMod = -1;
     balance.smoother=0;
-    balance.pidPGain=150;
-    balance.pidIGain=0;
-    balance.pidICount=0;
+    balance.pidPGain=6;
+    balance.pidIGain=40;
+    balance.pidICount=40;
     balance.pidDGain=0;
     balance.activeAngle=1;
-    balance.targetAngle=0;
+    balance.targetAngle=3;
+    balance.tmrIMU=12;
     MQTT_BROKER_IP = "192.168.2.21";
   }                                        //if
   else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
