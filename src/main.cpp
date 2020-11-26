@@ -12,6 +12,9 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-11-26 DE: -change Doug's wheel direction factor, & other defaults due to new stepper motors
+ * 2020-11-11 DE: -default IP adress string to "-no IP address-"
+ *                - generalize updateLeftOLED() to take 2 strings that overlay lines 2 and 3 on OLED
  * 2020-10-27 DE: -expand possible PID error history to 200 past values, still controlled by balance.pidICount
  *                -added Evt (event) MQTT dataflow, and hthEvt MQTT topic to allow bot to report asynchronous events,
  *                 using publishEvent() routine and add a test event just before spreadsheet titles come out
@@ -288,9 +291,9 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 const char *mySSID = "NOTHING";
 const char *myPassword = "NOTHING";
 String myMACaddress;               // MAC address of this SOC. Used to uniquely identify this robot
-String myIPAddress;                // IP address of the SOC.
-String myAccessPoint;              // WiFi Access Point that we managed to connected to
-String myHostName;                 // Name by which we are known by the Access Point
+String myIPAddress = "-no IP address-";     // IP address of the SOC.
+String myAccessPoint = "-no access point-"; // WiFi Access Point that we managed to connected to
+String myHostName = "-no hostname-";        // Name by which we are known by the Access Point
 String myHostNameSuffix = "Twipe"; // Suffix to add to WiFi host name for this robot
 WiFiClient client;                 // Create an ESP32 WiFiClient class to connect to the MQTT server
 String tmpHostNameVar;             // Hold WiFi host name created in this function
@@ -498,6 +501,9 @@ typedef struct
   float activeAngle = 1;                     // how close to vertical, in degrees, before you start balancing attempt, & go to bs_active
   float targetAngle = 0;                     // angle we're aiming for, when robot is balanced around center of mass      
   float maxAngleMotorActive = 30;            // Maximum angle the robot can lean at before motors shut off
+  bool motorTest = false;                    // whether you're doing motor tests vs. balancing
+  int testLeft = 0;        // motorINt value for left wheel while testing
+  int testRight = 0;       // motorInt value for right wheel while testing
 
   // control params, setup in cfgBtMAC, and configurable by MQTT
   int slowTicks;               // # of 20uS timer interrupts per step at slowest practical speed
@@ -927,8 +933,6 @@ void publishMQTT(String topic, String msg)
 } //publishMQTT()
 
 
-//    publishMQTT(MQTTTop_shtCom,String(balance.pidPGain) +","+ String(balance.pidIGain) 
-//  void publishMQTT(String topic, String msg)
 /*
 The general format of a published MQTT message is
    bot-ID "/" topic space timestamp comma message
@@ -1116,6 +1120,33 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 */
   } // if... gethealthtel
 
+else if(tmp.substring(0,5) == "motor")
+{
+  int firstComma = tmp.indexOf(",") ;
+  int secondComma = tmp.indexOf(",", firstComma + 1) ;
+
+  int lenLeft = secondComma - firstComma - 1;
+  int lenRight = len - secondComma - 1 ;
+
+  String valLeft = tmp.substring(firstComma + 1,firstComma + 1 + lenLeft) ; 
+  String valRight = tmp.substring(secondComma + 1, secondComma + 1 + lenRight);
+
+  balance.testLeft = valLeft.toInt();
+  balance.testRight = valRight.toInt();
+  balance.motorTest = true;                     // guess that we have a non zero speed to turn on test mode
+  if (balance.testLeft == 0 && balance.testRight == 0 )   // but check to see if they're zeros
+  {   balance.motorTest = false;         // if so, exit from motor test mode...
+                                         // but stop the motors before you go
+      noInterrupts();         // block any motor interrupts while we change control parameters
+      left.tickSetting = 0;
+      right.tickSetting = 0;
+      interrupts();            // Allow other code to update balance variables again                               
+  }
+  else
+  {   balance.motorTest = true;
+  }
+  
+}
 
   /*
   else if (tmp == "balTelCON")
@@ -1447,7 +1478,7 @@ void calcBalanceParmeters(float angleRadians)
 =================================================================================================== */
 void balanceByAngle()
 {
-  if(balance.slowTicks >= 0 )                         // if we're doing PID balancing rather than a speed test, react to current angle
+  if(not balance.motorTest )                         // if we're doing PID balancing rather than a speed test, react to current angle
   {
     balance.angleErr = balance.tilt - balance.targetAngle;   // difference between current and desired angles
 
@@ -1507,13 +1538,12 @@ Serial.print(balance.pid); Serial.print(", ");
 Serial.print(groundSpeed); Serial.print(", ");
 
 // TODO retrofit distancePerTick, groundSpeed, minGroundSpeed, maxGroundSpeed etc, into structures
-
-Serial.println(balance.motorTicks); 
-        // experimental  motor speed change smoothing
+    // experimental  motor speed change smoothing
     // smoother is a variable, and the control parameter - smoother == 0 means don't smooth
     if(balance.smoother != 0)                       // if smoothing is enabled, do it
     {    balance.motorTicks = balance.lastSpeed + balance.smoother * (balance.motorTicks-balance.lastSpeed);
     }
+    
     noInterrupts();         // block any motor interrupts while we change control parameters
     //d2  reverse direction of wheel rotation, based on observation of Dougs bot
     left.tickSetting = balance.directionMod * balance.motorTicks;
@@ -1526,21 +1556,21 @@ Serial.println(balance.motorTicks);
     interrupts();
     balance.lastSpeed = balance.motorTicks;                 // remember last speed for smoothing and quick direction change
   }  //if(balance.slowTicks > 0 )
-  else        // -ve balance.slowTicks ( & fast)  indicates we're doing a speed test rather than balancing
-              //   if balance.slowTicks is -ve, it's the desired MotorInt value for  left wheel, including the -ve sign 
-              //   if balance.slowTicks is -ve, it's the desired MotorInt value for right wheel, including the -ve sign
-              //   if balance.slowTicks is -ve and bot_fast >= 0, then balance.slowTicks's speed will be used for both wheels
+
+  else   // do this is we are doing motor testing via MQTT motor command rather than
  
-  {           // follow directed speed regardless of current tilt angle
-  //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+  {           // use motor speeds & direction from MQTT motor command regardless of current tilt angle, 
+              // but control by s/w readable switch: in = on, out = off  (notice matching word lengths)
+
+  /* //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
           digitalWrite(gp_DRV1_ENA, LOW);
           digitalWrite(gp_DRV2_ENA, LOW);
 
     noInterrupts();         // block any motor interrupts while we change control parameters
-    left.tickSetting = balance.directionMod * balance.slowTicks;
-    if(balance.fastTicks < 0) { right.tickSetting = balance.directionMod * balance.fastTicks; }
-    else { right.tickSetting = balance.directionMod * balance.slowTicks;  }
+    left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
+    right.tickSetting = balance.directionMod * balance.testRight; 
     interrupts();
+    */
   }  // else
   
 
@@ -1709,12 +1739,12 @@ void updateRightOLED()
  * @param stage string indicating the stage within setup() we are about to start
  * @note This routine is only called during the initial execution of setup()   
 =================================================================================================== */
-void updateLeftOLED(String stage)
+void updateLeftOLED(String title, String stage)
 {
   runbit(20) ;
-  leftOLED.clear();
-  leftOLED.drawString(0, 0, String("   Setup() Stage: "));
-  leftOLED.drawString(0, 32, String("> ")+String(stage));
+//  leftOLED.clear();
+  leftOLED.drawString(0, 0, String(title)+"      ");
+  leftOLED.drawString(0, 32, String("> ")+String(stage)+"      ");
  // rightOLED.drawString(0, 32, String("PID: ")+String(pid));
   leftOLED.display();
 } //UpdateLeftOLED()
@@ -1910,14 +1940,15 @@ void cfgByMAC()
     attribute.stepsPerRev = 200;
     balance.slowTicks=800;
     balance.fastTicks=300;
-    balance.directionMod = 1;
+    balance.directionMod = -1;  // changed when started using same Makeblock motors as Andrew
     balance.smoother=0;
-    balance.pidPGain=120;
-    balance.pidIGain=8;
-    balance.pidICount=0;
+    balance.pidPGain=6;
+    balance.pidIGain=40;
+    balance.pidICount=40;
     balance.pidDGain=0;
     balance.activeAngle=1;
     balance.targetAngle=.5;
+    balance.tmrIMU=12;
     MQTT_BROKER_IP = "192.168.0.99";
    } //else if
   else
@@ -2201,26 +2232,27 @@ void setup()
   Serial.println(F("<setup> Start of setup"));
   
   setupOLED();                           // Setup OLED communication early, so we can show setup() stages
-   updateLeftOLED("cfgByMAC");           // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","cfgByMAC");           // display setup routine we are about to execute in bot's right eye
   cfgByMAC();                            // Use the devices MAC address to make specific configuration settings
-   updateLeftOLED("setRobotObjective");  // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setRobotObjective");  // display setup routine we are about to execute in bot's right eye
   setRobotObjective(STATE_STAND_GROUND); // Assign robot the goal to stand upright
-   updateLeftOLED("setupLED");           // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setupLED");           // display setup routine we are about to execute in bot's right eye
   setupLED();                            // Set up the LED that the loop() flashes
-   updateLeftOLED("setupFreeRTOStimers");// display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setupFreeRTOStimers");// display setup routine we are about to execute in bot's right eye
   setupFreeRTOStimers();                 //  User timer based FreeRTOS threads to manage a number of asynchronous tasks
-   updateLeftOLED("setupMQTT");          // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setupMQTT");          // display setup routine we are about to execute in bot's right eye
   setupMQTT();                           // Set up MQTT communication
-   updateLeftOLED("setupWiFi");          // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setupWiFi");          // display setup routine we are about to execute in bot's right eye
   setupWiFi();                           // Set up WiFi communication
-   updateLeftOLED("setupIMU");           // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setupIMU");           // display setup routine we are about to execute in bot's right eye
   setupIMU();                            // Set up IMU communication
-   updateLeftOLED("setupDriverMotors");  // display setup routine we are about to execute in bot's right eye
+   updateLeftOLED("Setup() stage:          ","setupDriverMotors");  // display setup routine we are about to execute in bot's right eye
   setupDriverMotors();                   // Set up the Stepper motors used to drive the robot motion
     updateLeftOLEDNetInfo();             // aftersetup's done, show IP, MAC, AccessPoint and Hostname in left OLED
   goOLED = millis() + tmrOLED;         // Reset OLED update counter
   goLED = millis() + tmrLED;           // Reset LED flashing counter
-  goIMU = millis() + balance.tmrIMU;   // Reset IMU update counter
+  goIMU = millis() + balance.tmrIMU;   // Reset IMU update counterFtitles
+
   goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
   cntLoop = 0;                         // Reset counter that tracks how many iterations of loop() have occurred
   updateLeftOLEDNetInfo();             // output network info once since it's stable, not repeatedly
@@ -2236,7 +2268,7 @@ void loop()
 
   if (millis() >= goIMU)                  // use "else if" to only allow one routine to run per loop()...
   {                                       // which increases frequency of checks for goIMU readiness
-    goIMU = millis() + balance.tmrIMU;            // Reset IMU update counter right away.
+    goIMU = millis() + balance.tmrIMU;    // Reset IMU update counter right away.
     holdMilli1 = telMilli1;               // remember previous startime to calculate delta time for goIMU starts
     telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
     tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
@@ -2246,29 +2278,45 @@ void loop()
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
       checkBalanceState();                // handle balance state changes: sleep, awake, active
-      if(balance.state ==bs_active || balance.slowTicks < 0)       // if we're in a state where we can try to balance or do speed test
-      {                                   // then do so, depending on which method we're using
-        if(balance.method == bm_catchup)
-        {
-          //de suggest removing the arg in radians, and use stored balance.tilt value in degrees
-          calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
-        } // if(balance.method)
-        if(balance.method == bm_angle)
-        { balanceByAngle();               // Do balancing calc's based on angle displacement from vertical, 
-                                          // and publish telemetry, resetting runFlagword
-        telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
-        tm_OldbalByAng = telMilli5 - telMilli4; // telemetry measurement: time in BalanceByAngle, reported in NEXT MQTT publish
-        }
-      } // if(balance.state...)
-                 
-    }                               // if rCode
-  }                                 // if millis() > goIMU
+      if(balance.motorTest == true)       // ar we in motor testing mode?
+      {
+          //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+          digitalWrite(gp_DRV1_ENA, LOW);
+          digitalWrite(gp_DRV2_ENA, LOW);
+
+          noInterrupts();         // block any motor interrupts while we change control parameters
+          left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
+          right.tickSetting = balance.directionMod * balance.testRight; 
+          interrupts();
+      }
+      else
+      {
+
+          if(balance.state ==bs_active)       // if we're in a state where we can try to balance or do speed test
+          {                                   // then do so, depending on which method we're using
+            if(balance.method == bm_catchup)
+            {
+              //de suggest removing the arg in radians, and use stored balance.tilt value in degrees
+              calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
+            } // if(balance.method)
+            if(balance.method == bm_angle)
+            { balanceByAngle();               // Do balancing calc's based on angle displacement from vertical, 
+                                              // and publish telemetry, resetting runFlagword
+            telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
+            tm_OldbalByAng = telMilli5 - telMilli4; // telemetry measurement: time in BalanceByAngle, reported in NEXT MQTT publish
+            }
+          } // if(balance.state...) 
+
+      }    // else , motorTest 
+    } // if rCode
+  }  // if millis() > goIMU
   else 
   {  if (WifiLastEvent != -1) {processWifiEvent(); }               // if there's a pending Wifi event, handle it
      else
      {  if (millis() >= goOLED) {updateRightOLED(); }              // replace contents of both OLED displays
         else 
-        {  if (millis() >= goLED) {updateLED(); }                  // Update the OLED with data
+        {  //if (millis() >= goLED) {updateLED(); }                  // Update the front amber LED 
+           if (millis() >= goLED) {updateLED(); }                  // Update the front amber LED
            else 
            {  if (millis() >= goMETADATA) {updateMetaData(); }     // Send data to serial terminal
            }
