@@ -12,6 +12,7 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-12-13 DE: -undid change to Doug's wheel direction factor.
  * 2020-11-26 DE: -change Doug's wheel direction factor, & other defaults due to new stepper motors
  * 2020-11-11 DE: -default IP adress string to "-no IP address-"
  *                - generalize updateLeftOLED() to take 2 strings that overlay lines 2 and 3 on OLED
@@ -1557,7 +1558,7 @@ Serial.print(groundSpeed); Serial.print(", ");
     balance.lastSpeed = balance.motorTicks;                 // remember last speed for smoothing and quick direction change
   }  //if(balance.slowTicks > 0 )
 
-  else   // do this is we are doing motor testing via MQTT motor command rather than
+  else   // do this if we are doing motor testing via MQTT motor command rather than
  
   {           // use motor speeds & direction from MQTT motor command regardless of current tilt angle, 
               // but control by s/w readable switch: in = on, out = off  (notice matching word lengths)
@@ -1940,7 +1941,8 @@ void cfgByMAC()
     attribute.stepsPerRev = 200;
     balance.slowTicks=800;
     balance.fastTicks=300;
-    balance.directionMod = -1;  // changed when started using same Makeblock motors as Andrew
+//    balance.directionMod = -1;  // changed when started using same Makeblock motors as Andrew
+    balance.directionMod = 1;  // then changed back
     balance.smoother=0;
     balance.pidPGain=6;
     balance.pidIGain=40;
@@ -2278,16 +2280,25 @@ void loop()
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
       checkBalanceState();                // handle balance state changes: sleep, awake, active
-      if(balance.motorTest == true)       // ar we in motor testing mode?
+      if(balance.motorTest == true)       // are we in motor testing mode?
       {
           //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
-          digitalWrite(gp_DRV1_ENA, LOW);
-          digitalWrite(gp_DRV2_ENA, LOW);
+          if(digitalRead(gp_SWR_BUTTON) == true)
+          {
+            digitalWrite(gp_DRV1_ENA, LOW);   // turn on the motors
+            digitalWrite(gp_DRV2_ENA, LOW);
 
-          noInterrupts();         // block any motor interrupts while we change control parameters
-          left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
-          right.tickSetting = balance.directionMod * balance.testRight; 
-          interrupts();
+            noInterrupts();         // block any motor interrupts while we change control parameters
+            left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
+            right.tickSetting = balance.directionMod * balance.testRight; 
+            interrupts();
+          }
+          else        // i.e. sw readable switch says stop motor test...
+          {           // turn off the motors, depending on switch setting
+            digitalWrite(gp_DRV1_ENA, HIGH);
+            digitalWrite(gp_DRV2_ENA, HIGH);
+          }
+          
       }
       else
       {
