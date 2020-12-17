@@ -12,6 +12,13 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-12-16 DE: - avoid calling checkBalanceState if we're in motor test mode
+ *                - remove display of "My demo" in left OLED, making room for SETUP stage display
+ *                - remove tracking of motor enable state - red herring
+ *                - un-comment the OLED clear in updateLeftOLED. Misunderstood how overwrite would work.
+ *                - update network info in left OLED every time the orange LED is blinked
+ * 2020-12-15 DE: -disable motor controllers in setup
+ *                -track motor enable state in balance.motorEna  , and avoid unnecessary acess to ENA bit
  * 2020-12-13 DE: -undid change to Doug's wheel direction factor.
  * 2020-11-26 DE: -change Doug's wheel direction factor, & other defaults due to new stepper motors
  * 2020-11-11 DE: -default IP adress string to "-no IP address-"
@@ -1743,7 +1750,7 @@ void updateRightOLED()
 void updateLeftOLED(String title, String stage)
 {
   runbit(20) ;
-//  leftOLED.clear();
+  leftOLED.clear();
   leftOLED.drawString(0, 0, String(title)+"      ");
   leftOLED.drawString(0, 32, String("> ")+String(stage)+"      ");
  // rightOLED.drawString(0, 32, String("PID: ")+String(pid));
@@ -1814,7 +1821,7 @@ void setupOLED()
   leftOLED.init();
   leftOLED.setFont(ArialMT_Plain_16);
   leftOLED.setTextAlignment(TEXT_ALIGN_LEFT);
-  leftOLED.drawString(32, 20, "My Demo"); //64,22
+//  leftOLED.drawString(32, 20, "My Demo"); //64,22
   leftOLED.display();
   AMDP_PRINTLN("<setupOLED> Initialization of L & R OLEDs complete");
 } //setupOLED()
@@ -2070,7 +2077,7 @@ void setupDriverMotors()
   pinMode(gp_DRV1_ENA, OUTPUT);   // Set left enable pin as output
   pinMode(gp_DRV1_FAULT, INPUT);  // Set left driver fault pin as input
   digitalWrite(gp_DRV1_DIR, LOW); // Set left motor direction as forward
-  digitalWrite(gp_DRV1_ENA, LOW); // Enable right motor
+  digitalWrite(gp_DRV1_ENA, HIGH); // Disable right motor
   // Set up GPIO pins for the robot's left motor
   AMDP_PRINTLN("<setupDriverMotors> Initialize GPIO pins for left motor");
   pinMode(gp_DRV2_DIR, OUTPUT);   // Set right direction pin as output
@@ -2078,7 +2085,7 @@ void setupDriverMotors()
   pinMode(gp_DRV2_ENA, OUTPUT);   // Set right enable pin as output
   pinMode(gp_DRV2_FAULT, INPUT);  // Set right driver fault pin as input
   digitalWrite(gp_DRV2_DIR, LOW); // Set right motor direction as forward
-  digitalWrite(gp_DRV2_ENA, LOW); // Enable left motor
+  digitalWrite(gp_DRV2_ENA, HIGH); // Disable left motor
   // Set up motor driver ISR
   AMDP_PRINTLN("<setupDriverMotors> Configure timer0 to control the motor timing interrupts");
   uint8_t timerNumber = 0;                                               // Timer0 will be used to control the motors
@@ -2279,29 +2286,32 @@ void loop()
     tm_allReadIMU = telMilli4 - telMilli1; // telemetry measurement: total time for readIMU routine
     if (rCode)                            //de even if we don't read IMU, should still do balancing?
     {
-      checkBalanceState();                // handle balance state changes: sleep, awake, active
       if(balance.motorTest == true)       // are we in motor testing mode?
       {
           //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
           if(digitalRead(gp_SWR_BUTTON) == true)
           {
-            digitalWrite(gp_DRV1_ENA, LOW);   // turn on the motors
-            digitalWrite(gp_DRV2_ENA, LOW);
-
+            // turn motors on, but only if they aren't already on
+            if(digitalRead(gp_DRV2_ENA) == HIGH)
+            {
+              digitalWrite(gp_DRV1_ENA, LOW);   // turn on the motors
+              digitalWrite(gp_DRV2_ENA, LOW);
+            }
             noInterrupts();         // block any motor interrupts while we change control parameters
             left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
             right.tickSetting = balance.directionMod * balance.testRight; 
             interrupts();
           }
           else        // i.e. sw readable switch says stop motor test...
-          {           // turn off the motors, depending on switch setting
+          {           // turn off the motors, 
             digitalWrite(gp_DRV1_ENA, HIGH);
             digitalWrite(gp_DRV2_ENA, HIGH);
           }
           
-      }
-      else
+      }  // if(balance.motorTest == true)
+      else      // following is normal case where IMU readings control balancing efforts
       {
+          checkBalanceState();                // handle balance state changes: sleep, awake, active
 
           if(balance.state ==bs_active)       // if we're in a state where we can try to balance or do speed test
           {                                   // then do so, depending on which method we're using
@@ -2326,8 +2336,11 @@ void loop()
      else
      {  if (millis() >= goOLED) {updateRightOLED(); }              // replace contents of both OLED displays
         else 
-        {  //if (millis() >= goLED) {updateLED(); }                  // Update the front amber LED 
-           if (millis() >= goLED) {updateLED(); }                  // Update the front amber LED
+        {   
+           if (millis() >= goLED)
+           {    updateLED();                    // Update the front amber LED
+                updateLeftOLEDNetInfo();        // and the network info in left OLED
+           }            
            else 
            {  if (millis() >= goMETADATA) {updateMetaData(); }     // Send data to serial terminal
            }
