@@ -12,6 +12,10 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2020-12-27 DE: - have CPU utilization showing in right eye.
+ *                - adjusted a bunch of indentaton - hope it works in ANdrews environment. may depend on tabs = 3 spaces
+ * 2020-12-25 DE: - ad CPU usage measurement in variables starting with cu_
+ * 2020-12-17 DE: - set motor control values right in motor command handler
  * 2020-12-16 DE: - avoid calling checkBalanceState if we're in motor test mode
  *                - remove display of "My demo" in left OLED, making room for SETUP stage display
  *                - remove tracking of motor enable state - red herring
@@ -402,7 +406,6 @@ static volatile motorControl right;           // Define a struct for right wheel
 #define tmrOLED 200               // Milliseconds to wait between sending data to OLED over I2C
 #define tmrMETADATA 1000          // Milliseconds to wait between sending data to serial port
 #define tmrLED 1000 / 2           // Milliseconds to wait between flashes of LED (turn on / off twice in this time)
-uint32_t cntLoop = 0;             // Track how many times loop() has iterated
 int goIMU = 0;                    // Target time for next read of IMU data
 int goOLED = 0;                   // Target time for next OLED update
 int goMETADATA = 0;               // Target time for next serial port
@@ -426,8 +429,34 @@ unsigned long tm_uMDtime;         // telemetry measure: time spent in updateMeta
 int tm_MQpubCnt = 0;              // telemetry measure: count of onMQTTpublish() executions
 
 unsigned long runFlagWord;        // telemetry word with bit coded flags indicating if a routine has run since last telemetry
-                                  // the indicated routine has runbit(n); at its beginning, where n is it's bit number, 0 - 31
-                                  // the runFlagWord is cleared after each balance telemetry publish
+//                                // the indicated routine has runbit(n); at its beginning, where n is it's bit number, 0 - 31
+//                                // the runFlagWord is cleared after each balance telemetry publish
+
+// CPU Usage measurement variables
+int cu_secStart = 0;              // timestamp for start of current CPU measurement second
+int cu_loopStart = 0;             // timestamp for start of current loop() interation
+int cu_lastLoopEnd = 0;           // timestamp for end of loop() before OS does it's stuff
+
+// CPU usage measurements, in microseconds
+int cu_IMU = 0;                   // time spent in goIMU controlled part of main loop
+int cu_wifi = 0;                  // time spent in wifi processing in main loop
+int cu_OLED = 0;                  // time spent in goOLED controlled part of main loop
+int cu_LED = 0;                   // time spent in goLED controlled part of main loop
+int cu_metaData = 0;              // time spent in goMetadata controlled part of main loop
+int cu_OS = 0;                    // time spent outside of loop()
+int cu_loop = 0;                  // time spinning in loop() finding nothing to do
+int cu_other = 0;                 // time spent in "none of the above", i.e. what's left to make up the second
+
+// CPU usage measurements, as interget percents, rounded down
+int cu$IMU = 0;                   // time spent in goIMU controlled part of main loop
+int cu$wifi = 0;                  // time spent in wifi processing in main loop
+int cu$OLED = 0;                  // time spent in goOLED controlled part of main loop
+int cu$LED = 0;                   // time spent in goLED controlled part of main loop
+int cu$metaData = 0;              // time spent in goMetadata controlled part of main loop
+int cu$OS = 0;                    // time spent outside of loop()
+int cu$loop = 0;                  // time spinning in loop() finding nothing to do
+int cu$other = 0;                 // time spent in "none of the above", i.e. what's left to make up the second
+
                                   
 #define runbit(x)   runFlagWord  |= 1 << x;
 //             NOTES  (see below)
@@ -1152,6 +1181,10 @@ else if(tmp.substring(0,5) == "motor")
   }
   else
   {   balance.motorTest = true;
+      noInterrupts();         // block any motor interrupts while we change control parameters
+      left.tickSetting = balance.testLeft;
+      right.tickSetting = balance.testRight;
+      interrupts();            // Allow other code to update balance variables again          
   }
   
 }
@@ -1565,20 +1598,10 @@ Serial.print(groundSpeed); Serial.print(", ");
     balance.lastSpeed = balance.motorTicks;                 // remember last speed for smoothing and quick direction change
   }  //if(balance.slowTicks > 0 )
 
-  else   // do this if we are doing motor testing via MQTT motor command rather than
+  else   // do this if we are doing motor testing via MQTT motor command rather than IMU controlled balancing
  
-  {           // use motor speeds & direction from MQTT motor command regardless of current tilt angle, 
-              // but control by s/w readable switch: in = on, out = off  (notice matching word lengths)
-
-  /* //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
-          digitalWrite(gp_DRV1_ENA, LOW);
-          digitalWrite(gp_DRV2_ENA, LOW);
-
-    noInterrupts();         // block any motor interrupts while we change control parameters
-    left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
-    right.tickSetting = balance.directionMod * balance.testRight; 
-    interrupts();
-    */
+  {    // this is now handled in the main loop() 
+  
   }  // else
   
 
@@ -1998,10 +2021,48 @@ void cfgByMAC()
 =================================================================================================== */
 void updateLED()
 {
-  runbit(24) ;
-  blinkState = !blinkState;
-  digitalWrite(gp_SWC_LED, blinkState);
-  goLED = millis() + tmrLED; // Reset LED flashing counter
+   runbit(24) ;
+   blinkState = !blinkState;
+   digitalWrite(gp_SWC_LED, blinkState);
+   goLED = millis() + tmrLED; // Reset LED flashing counter
+   
+   // once a second, update left OLED with CPU utilization information
+   if(blinkState == true)          // it alternates - this is a half second timer
+   {
+      // TODO rewite OLED display routines, using low frequency display, independent of LED
+      rightOLED.clear();
+      String tmp = String("IM:") +String(cu$IMU) +String(" Wi:") +String(cu$wifi) +String(" OL:") +String(cu$OLED)+ String("|");
+      rightOLED.drawString(0,0,String(tmp));
+
+      tmp = String("LD:") +String(cu$LED) +String(" MD:") +String(cu$metaData) +String(" OS:") +String(cu$OS)+ String("|");
+      rightOLED.drawString(0,16,String(tmp));
+
+      tmp = String("loop:") +String(cu$loop) +String(" othr:") +String(cu$other) + String("|");
+      rightOLED.drawString(0,32,String(tmp));
+      /*
+      rightOLED.drawString(0, 0, String("IM  WI  OL  LD "));
+      String tmp = String(cu$IMU) +" "+ String(cu$wifi) +" "+String(cu$OLED) +" "+String(cu$LED);
+      rightOLED.drawString(0,16,String(tmp));
+      rightOLED.drawString(0, 32, String("MD  OS  LO  OT "));
+      tmp = String(cu$metaData) +" "+ String(cu$OS) +" "+String(cu$loop) +" "+String(cu$other);
+      rightOLED.drawString(0,48,String(tmp));
+      */
+      rightOLED.display();
+
+      /*
+      cu_IMU = 0;       // zero time counters for next second
+      cu_wifi = 0;
+      cu_OLED = 0; 
+      cu_LED = 0; 
+      cu_metaData = 0;
+      cu_OS = 0; 
+      cu_loop = 0; 
+      cu_other = 0; 
+      */
+
+      // rightOLED.drawString(0, 32, String("PID: ")+String(pid));
+
+   }
 } // updateLED()
 
 /**
@@ -2263,8 +2324,20 @@ void setup()
   goIMU = millis() + balance.tmrIMU;   // Reset IMU update counterFtitles
 
   goMETADATA = millis() + tmrMETADATA; // Reset IMU update counter
-  cntLoop = 0;                         // Reset counter that tracks how many iterations of loop() have occurred
   updateLeftOLEDNetInfo();             // output network info once since it's stable, not repeatedly
+
+  cu_IMU = 0;                   // time spent in goIMU controlled part of main loop
+  cu_wifi = 0;                  // time spent in wifi processing in main loop
+  cu_OLED = 0;                  // time spent in goOLED controlled part of main loop
+  cu_LED = 0;                   // time spent in goLED controlled part of main loop
+  cu_metaData = 0;              // time spent in goMetadata ontrolled part of main loop
+  cu_OS = 0;                    // time spent outside of loop()
+  cu_loop = 0;                  // time spinning in loop() finding nothing to do
+  cu_other = 0;                 // time spent in "none of the above", i.e. what's left to make up the second
+
+  cu_secStart = micros();       // cpu utilization is measured over each second, and first second starts now
+  cu_lastLoopEnd = 0;           // signal that we're starting, and don't have a previous loop to worry about
+
   Serial.println(F("<setup> End of setup"));
 } //setup()
 
@@ -2273,78 +2346,167 @@ void setup()
 =================================================================================================== */
 void loop()
 {
-  cntLoop++; // Increment loop() counter
+  
+   cu_loopStart = micros();                     // start point for time used in this loop
+   if(cu_lastLoopEnd != 0)                      // if we're doing first measured second, skip adding previous OS overhead
+   {
+      cu_OS += cu_loopStart - cu_lastLoopEnd;   // add on time after last loop ended & before this one started
+   }
 
-  if (millis() >= goIMU)                  // use "else if" to only allow one routine to run per loop()...
-  {                                       // which increases frequency of checks for goIMU readiness
-    goIMU = millis() + balance.tmrIMU;    // Reset IMU update counter right away.
-    holdMilli1 = telMilli1;               // remember previous startime to calculate delta time for goIMU starts
-    telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
-    tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
-    boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
-    telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
-    tm_allReadIMU = telMilli4 - telMilli1; // telemetry measurement: total time for readIMU routine
-    if (rCode)                            //de even if we don't read IMU, should still do balancing?
-    {
-      if(balance.motorTest == true)       // are we in motor testing mode?
+   if (millis() >= goIMU)                  // use "else if" to only allow one routine to run per loop()...
+   {                                       // which increases frequency of checks for goIMU readiness
+      goIMU = millis() + balance.tmrIMU;    // Reset IMU update counter right away.
+      holdMilli1 = telMilli1;               // remember previous startime to calculate delta time for goIMU starts
+      telMilli1 = millis();                 // get a timestamp for telemetry data (gives telemetry publish delay)
+      tm_IMUdelta = telMilli1 - holdMilli1; // telemetry measurement: elapsed time since last goIMU call.
+      boolean rCode = readIMU();            // Read the IMU. Balancing and data printing is handled in here as well
+      telMilli4 = millis();                 // telemetry timestamp (gives readIMU execution time)
+      tm_allReadIMU = telMilli4 - telMilli1; // telemetry measurement: total time for readIMU routine
+      if (rCode)                            //de even if we don't read IMU, should still do balancing?
       {
-          //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
-          if(digitalRead(gp_SWR_BUTTON) == true)
-          {
-            // turn motors on, but only if they aren't already on
-            if(digitalRead(gp_DRV2_ENA) == HIGH)
+         if(balance.motorTest == true)       // are we in motor testing mode?
+         {
+            //        AMDP_PRINTLN("<checkTiltToActivateMotors> Enable stepper motors");
+            if(digitalRead(gp_SWR_BUTTON) == true)
             {
-              digitalWrite(gp_DRV1_ENA, LOW);   // turn on the motors
-              digitalWrite(gp_DRV2_ENA, LOW);
+               // turn motors on, but only if they aren't already on
+               if(digitalRead(gp_DRV2_ENA) == HIGH)
+               {
+                  digitalWrite(gp_DRV1_ENA, LOW);   // turn on the motors
+                  digitalWrite(gp_DRV2_ENA, LOW);
+               }
+               noInterrupts();         // block any motor interrupts while we change control parameters
+               left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
+               right.tickSetting = balance.directionMod * balance.testRight; 
+               interrupts();
             }
-            noInterrupts();         // block any motor interrupts while we change control parameters
-            left.tickSetting = balance.directionMod * balance.testLeft;   // use motor speeds from MQTT motor command
-            right.tickSetting = balance.directionMod * balance.testRight; 
-            interrupts();
-          }
-          else        // i.e. sw readable switch says stop motor test...
-          {           // turn off the motors, 
-            digitalWrite(gp_DRV1_ENA, HIGH);
-            digitalWrite(gp_DRV2_ENA, HIGH);
-          }
-          
-      }  // if(balance.motorTest == true)
-      else      // following is normal case where IMU readings control balancing efforts
+            else        // i.e. sw readable switch says stop motor test...
+            {           // turn off the motors, 
+               // leave them enabled, so we don't lose sync with the motors,
+               // digitalWrite(gp_DRV1_ENA, HIGH);
+               // digitalWrite(gp_DRV2_ENA, HIGH);
+
+               // but stop issuing step commands (leaving the wheels clenched on purpose)
+               noInterrupts();         // block any motor interrupts while we change control parameters
+               left.tickSetting = 0;   //  leave motor speeds from MQTT motor command untouched
+               right.tickSetting = 0;  // but prevent interrupt level from stepping 
+               interrupts();
+            }  // else gp_SWQR_BUTTON == true
+         }  // if(balance.motorTest == true)
+         else      // following is normal case where IMU readings control balancing efforts
+         {
+            checkBalanceState();                // handle balance state changes: sleep, awake, active
+ 
+            if(balance.state ==bs_active)       // if we're in a state where we can try to balance or do speed test
+            {                                   // then do so, depending on which method we're using
+               if(balance.method == bm_catchup)
+               {
+                  //de suggest removing the arg in radians, and use stored balance.tilt value in degrees
+                  calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
+               }  // if(balance.method)
+               if(balance.method == bm_angle)
+               {  balanceByAngle();                 // Do balancing calc's based on angle displacement from vertical
+                  //                                // and publish telemetry, resetting runFlagword
+                  telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
+                  tm_OldbalByAng = telMilli5 - telMilli4; // telemetry measurement: time in BalanceByAngle, reported in NEXT MQTT publish
+               }
+            }  // if(balance.state...) 
+         }   // else , motorTest 
+      } // if rCode
+      cu_IMU += micros() - cu_loopStart;   // add time to IMU routine counter
+   }  // if millis() > goIMU
+   else 
+   {  if (WifiLastEvent != -1) 
       {
-          checkBalanceState();                // handle balance state changes: sleep, awake, active
-
-          if(balance.state ==bs_active)       // if we're in a state where we can try to balance or do speed test
-          {                                   // then do so, depending on which method we're using
-            if(balance.method == bm_catchup)
-            {
-              //de suggest removing the arg in radians, and use stored balance.tilt value in degrees
-              calcBalanceParmeters(ypr[2]);   // Do balancing calculations based on catch up distance
-            } // if(balance.method)
-            if(balance.method == bm_angle)
-            { balanceByAngle();               // Do balancing calc's based on angle displacement from vertical, 
-                                              // and publish telemetry, resetting runFlagword
-            telMilli5 = millis();             // telemetry timestamp (gives balanceByAngle execution time)
-            tm_OldbalByAng = telMilli5 - telMilli4; // telemetry measurement: time in BalanceByAngle, reported in NEXT MQTT publish
-            }
-          } // if(balance.state...) 
-
-      }    // else , motorTest 
-    } // if rCode
-  }  // if millis() > goIMU
-  else 
-  {  if (WifiLastEvent != -1) {processWifiEvent(); }               // if there's a pending Wifi event, handle it
-     else
-     {  if (millis() >= goOLED) {updateRightOLED(); }              // replace contents of both OLED displays
-        else 
-        {   
-           if (millis() >= goLED)
-           {    updateLED();                    // Update the front amber LED
-                updateLeftOLEDNetInfo();        // and the network info in left OLED
-           }            
-           else 
-           {  if (millis() >= goMETADATA) {updateMetaData(); }     // Send data to serial terminal
+         processWifiEvent();     // if there's a pending Wifi event, handle it
+         cu_wifi += micros() - cu_loopStart;   // add time to wifi routine counter
+      }               
+      else
+      {  if (millis() >= goOLED) 
+         {
+            updateRightOLED();                    // replace contents of both OLED displays
+            cu_OLED += micros() - cu_loopStart;   // add time to OLED routine counter
+         }
+         else 
+         {   
+            if (millis() >= goLED)
+            {  updateLED();                    // Update the front amber LED
+               updateLeftOLEDNetInfo();        // and the network info in left OLED
+               cu_LED += micros() - cu_loopStart;   // add time to LED routine counter
+            }            
+            else 
+            {  if (millis() >= goMETADATA)
+               {
+                  updateMetaData();           // Send data to serial terminal
+                  cu_metaData += micros() - cu_loopStart;   // add time to mettadata routine counter
+               }     
+               else
+               {
+                  // here if no routines were executed during loop() - took all the else cases.
+                  // capture the loop spinning overhead here, in cu_loop
+                  cu_loop += micros() - cu_loopStart;   // add time to loop routine counter
+               }    
            }
-        }
-     }
-  }
+         }
+      }
+   }
+   // get here whether or not a routine was executed during loop
+   // check to see if we've got to the end of the measurment second
+   int cu_secTime = micros() - cu_secStart;   // how far are we into the current second?
+   if(cu_secTime >= 1000000)                  // are we more than a million microseconds since start of measurement second?
+   {                                          // yes - time to analyse cpu percengtage use & leave it ready for OLED display
+      int cu_subTotal = cu_IMU +cu_wifi +cu_OLED +cu_LED +cu_metaData +cu_OS +cu_loop;
+      cu_other = cu_secTime - cu_subTotal;    //
+
+      // calculate percent usage and leave it for OLED routines to display
+      // TODO track high water mark for each CPU usage counter
+      cu$IMU = 100*cu_IMU / cu_secTime;                    // % time spent in goIMU controlled part of main loop
+      cu$wifi = 100*cu_wifi / cu_secTime;                  // % time spent in wifi processing in main loop
+      cu$OLED = 100*cu_OLED / cu_secTime;                  // % time spent in goOLED controlled part of main loop
+      cu$LED = 100*cu_LED / cu_secTime;                   // % time spent in goLED controlled part of main loop
+      cu$metaData = 100*cu_metaData / cu_secTime;          // % time spent in goMetadata controlled part of main loop
+      cu$OS = 100*cu_OS / cu_secTime;                      // % time spent outside of loop()
+      cu$loop = 100*cu_loop / cu_secTime;                  // % time spinning in loop() finding nothing to do
+      cu$other = 100*cu_other / cu_secTime;                // % time spent in "none of the above", i.e. what's left to make up the second
+
+      cu_IMU = 0;       // zero time counters for next second
+      cu_wifi = 0;
+      cu_OLED = 0; 
+      cu_LED = 0; 
+      cu_metaData = 0;
+      cu_OS = 0; 
+      cu_loop = 0; 
+      cu_other = 0; 
+
+      cu_secStart = micros();          // start up a new measurement second
+
+   }
+   // set up to capture OS overhead outside of loop() when next loop starts
+   cu_lastLoopEnd = micros();           // OS stuff between loops starts at this point, ends at start of next loop() iteration
 } //loop()
+
+/*
+// CPU Usage measurement variables
+int cu_secStart = 0;              // timestamp in microseconds for start of current CPU measurement second
+int cu_IMU = 0;                   // time spent in goIMU controlled part of main loop
+int cu_wifi = 0;                  // time spent in wifi processing in main loop
+int cu_OLED = 0;                  // time spent in goOLED controlled part of main loop
+int cu_LED = 0;                   // time spent in goLED controlled part of main loop
+int cu_metaData = 0;              // time spent in goMetadata ontrolled part of main loop
+int cu_OS = 0;                    // time spent outside of loop()
+int cu_loop = 0;                  // time spinning in loop() finding nothing to do
+int cu_other = 0;                 // time spent in "none of the above", i.e. what's left to make uyp the second
+
+int cu_secStart = 0;              // timestamp for start of current CPU measurement second
+int cu_loopStart = 0;             // timestamp for start of current loop() interation
+int cu_lastLoopEnd = 0;           // timestamp for end of loop() before OS does it's stuff
+
+int cu_IMU = 0;                   // time spent in goIMU controlled part of main loop
+int cu_wifi = 0;                  // time spent in wifi processing in main loop
+int cu_OLED = 0;                  // time spent in goOLED controlled part of main loop
+int cu_LED = 0;                   // time spent in goLED controlled part of main loop
+int cu_metaData = 0;              // time spent in goMetadata controlled part of main loop
+int cu_OS = 0;                    // time spent outside of loop()
+int cu_loop = 0;                  // time spinning in loop() finding nothing to do
+int cu_other = 0;                 // time spent in "none of the above", i.e. what's left to make up the second
+*/
