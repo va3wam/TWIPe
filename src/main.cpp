@@ -1932,9 +1932,9 @@ void cfgByMAC()
 {
   tmpHostNameVar = myHostNameSuffix + myMACaddress;
   myMACaddress = formatMAC();
-  if (myMACaddress == "BCDDC2F7D6D5") // This is Andrew's bot
+  if (myMACaddress == "B4E62D9E9061") // This is Andrew's bot
   {
-    AMDP_PRINTLN("<cfgByMAC> Setting up MAC BCDDC2F7D6D5 configuration - Andrew");
+    AMDP_PRINTLN("<cfgByMAC> Setting up MAC B4E62D9E9061 configuration - Andrew");
     attribute.XGyroOffset = -4691;
     attribute.YGyroOffset = 1935;
     attribute.ZGyroOffset = 1873;
