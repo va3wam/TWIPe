@@ -12,14 +12,16 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
- * 2021-01-14 DE: -redoing commit + push which didn't seem to work
+ * 2021-01-14 DE: - redoing commit + push which didn't seem to work
  * 2021-01-13 DE: - recover from mistakenly editing master instead of a branch:
- *                - track time spent in MQTT routines, although it's embedded on other numbers (turns out its tiny)
+ *                - track time spent in MQTT routines, although it's embedded on other numbers (turns out it's tiny)
  *                - include time for CPU usage calculation in loop's CPU bucket 
  *                - remove unused code planned for loop() optimization
- *                - simplify call to mqttClient.publish() in publishMQTT() to avoid cpomplier errors. The workaround for the
- *                   compiler error was causing "1" to be printed in serial monitor MQTT commands and parameters
- *                   case insensitive, so you can use  camel case, lower case, upper case, or random case
+ *                - reformatted entire main.cpp for consistent 3 character indentation
+ *                - simplify call to mqttClient.publish() in publishMQTT() to avoid compiler errors. The workaround for the
+ *                   compiler error was causing "1" to be printed in serial monitor 
+ *                - made MQTT commands and parameters case insensitive, so you can use camel case,
+ *                   lower case, upper case, or random case
  *                - add display of left and right DRV fault counters to bottom right corner of right eye. Seeing numbers for
  *                  right eye, even in simple hand held operation.
  * 2020-12-27 DE: - have CPU utilization showing in right eye.
@@ -633,13 +635,13 @@ String formatMAC()
  * @brief Converts a string to upper case
  * @return modified argument string
  *        used to make MQTT commands case insensitive
- *       from: https://stackoverflow.com/questions/735204/convert-a-string-in-c-to-upper-case // Antonin Gavrel's post
+ *       from: https://stackoverflow.com/questions/735204/convert-a-string-in-c-to-upper-case // Brandon Stewart's post, part 1
  * =============================================================================== */
 
-void StringToUpper(String strToConvert)      // convert the argument string to upper case
+String StringToUpper(String strToConvert)      // convert the argument string to upper case
 {
     std::transform(strToConvert.begin(), strToConvert.end(), strToConvert.begin(), ::toupper);
-    return;
+    return strToConvert;
 }
 
 /**
@@ -1145,8 +1147,8 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
    AMDP_PRINT("<onMqttMessage> Message to process = ");
    AMDP_PRINTLN(tmp);
 
-   String UC_command = tmp;         // make a copy of the incomming command
-   StringToUpper(UC_command);       // and convert it to upper case for case insensitive comparisons
+   String UC_command = tmp;                     // make a copy of the incomming command
+   UC_command = StringToUpper(UC_command);      // and convert it to upper case for case insensitive comparisons
    if (UC_command.substring(0,6) == "SETVAR")
    {
       AMDP_PRINTLN("<onMqttMessage> Received remote variable set command");
