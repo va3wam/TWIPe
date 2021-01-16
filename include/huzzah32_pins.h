@@ -19,7 +19,7 @@
  * |  2  |  -   | -       | 3.3 Volts |
  * |  3  |  -   | -       | No connection |
  * |  4  |  -   | -       | CPU Ground |
- * |  5  |  26  | -       | No connection |
+ * |  5  |  26  | -       | was n/c, but rewire: DRV1-fault, to avoid ESP onboard LED
  * |  6  |  25  | -       | ADC Aq. MOSFET controlled voltage diver input - reads modified battery level |
  * |  7  |  34  | -       | No connection |
  * |  8  |  39  | -       | INT pin on IMU - generates an interrupt |
@@ -39,7 +39,7 @@
  * | 22  |  33  |   O     | DRV2-STEP, Pin 7 |
  * | 23  |  27  |   O     | DRV2-ENA, Pin 1 |
  * | 24  |  12  | -       | N/C. Using this pin seems to prevent software download in some circumstances |
- * | 25  |  13  | -       | DRV1-FAULT Input. Pin 10 (used to be VDD on old A4988) Conflicts with onboard red LED? |
+ * | 25  |  13  | -       | DRV1-FAULT Input. Pin 10 (used to be VDD on old A4988) Conflicts with onboard red LED? | no longer used
  * | 26  |      | -       | USB, source of 5V for IC2-LCD pullups, LCD header |
  * | 27  |      | -       | Enable, n/c |
  * | 28  |      | -       | LiPo Battery socket, n/c |
@@ -50,7 +50,11 @@
 #define gp_DRV1_ENA 16                // Enable for DRV1 - controls 12V consumption, maybe
 #define gp_DRV1_STEP 18               // CPU output for STEP command 
 #define gp_DRV1_DIR 19                // CPU output for DIRection control
+#ifdef avoidEspLed                    // if DRV1 was rewired so fault uses cpu pin 5, gpio 26
+#define gp_DRV1_FAULT 26              // rewired so DRV1 fault line goes to cpu pin 5, gpio 26
+#else
 #define gp_DRV1_FAULT 13              // CPU input for fault indicator. Conflicts with onboard red LED?
+#endif
 
 #define gp_DRV2_ENA 27                // Enable for DRV1 - controls 12V consumption, maybe
 #define gp_DRV2_STEP 33               // CPU output for STEP command 

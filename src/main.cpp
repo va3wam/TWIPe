@@ -12,6 +12,10 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-01-15 DE: - fix StringToUpper(), changing it from void to returning a string
+ *                - change fault count display separator to * so it's not confused with a 1
+ *                - add control variable avoidEspLed which changes gpio definitions to correspond to board modification
+ *                - that puts DRV1 fault line onto cpu pin 5, gpio 26 rather than gpio 13, which is used by onboard LED
  * 2021-01-14 DE: - redoing commit + push which didn't seem to work
  * 2021-01-13 DE: - recover from mistakenly editing master instead of a branch:
  *                - track time spent in MQTT routines, although it's embedded on other numbers (turns out it's tiny)
@@ -199,6 +203,7 @@
 // from https://github.com/ThingPulse/esp8266-oled-ssd1306
 #include <MPU6050-fix2764.h>                        // for MPU6050
 // require the version that has fix for misplaced parenthesis at line 2764
+// #define avoidEspLed true                            // tell huzzah32 we've modified DRV1 fault pin to go to cpu pin 5, gpio 26
 #include <huzzah32_pins.h>                          // Defines our usage of the GPIO pins for Adafruit Huzzah32 dev board
 // our own creation
 #include <i2c_metadata.h>                           // Defines all I2C related info including device addresses, bus pins and bus speeds
@@ -2027,7 +2032,7 @@ void updateLED()
       tmp = String("loop:") +String(cu$loop) +String(" othr:") +String(cu$other) + String("|");
       rightOLED.drawString(0,32,String(tmp));
 
-      tmp = String("Mq: ") + String(cu$mqtt) +String("|") + String(health.leftDRVfault) +String("|")+String(health.rightDRVfault) +String("|");
+      tmp = String("Mq: ") + String(cu$mqtt) +String("*") + String(health.leftDRVfault) +String("*")+String(health.rightDRVfault) +String("*");
       rightOLED.drawString(0,48,String(tmp));
 
       rightOLED.display();
@@ -2108,7 +2113,7 @@ void setupDriverMotors()
    pinMode(gp_DRV1_ENA, OUTPUT);   // Set left enable pin as output
    pinMode(gp_DRV1_FAULT, INPUT);  // Set left driver fault pin as input
    digitalWrite(gp_DRV1_DIR, LOW); // Set left motor direction as forward
-   digitalWrite(gp_DRV1_ENA, HIGH); // Disable right motor
+   digitalWrite(gp_DRV1_ENA, HIGH); // Disable left motor
 
    // Set up GPIO pins for the robot's left motor
    AMDP_PRINTLN("<setupDriverMotors> Initialize GPIO pins for left motor");
@@ -2117,7 +2122,7 @@ void setupDriverMotors()
    pinMode(gp_DRV2_ENA, OUTPUT);   // Set right enable pin as output
    pinMode(gp_DRV2_FAULT, INPUT);  // Set right driver fault pin as input
    digitalWrite(gp_DRV2_DIR, LOW); // Set right motor direction as forward
-   digitalWrite(gp_DRV2_ENA, HIGH); // Disable left motor
+   digitalWrite(gp_DRV2_ENA, HIGH); // Disable Right motor
 
    // Set up motor driver ISR
    AMDP_PRINTLN("<setupDriverMotors> Configure timer0 to control the motor timing interrupts");
