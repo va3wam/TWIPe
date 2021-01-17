@@ -12,6 +12,7 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-01-16 DE: - trivial change (only this line) to test git merge script
  * 2021-01-15 DE: - fix StringToUpper(), changing it from void to returning a string
  *                - change fault count display separator to * so it's not confused with a 1
  *                - add control variable avoidEspLed which changes gpio definitions to correspond to board modification
