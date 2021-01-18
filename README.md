@@ -1,7 +1,28 @@
 # TWIPe
+This is the repository for a Two Wheeled Inverted Pendulum robot called Twipe. Be advised that not only is there Aduino code written to run on an Adafruit Huzzah32 development board but also Eagle PCB design files and Fusion360 CAD files. 
 
-
-This project contains the embedded system code used for a Two Wheeled Inverted Pendulum robot. 
+## Local Directory Structure
+```
+Documents
+└───VisualStudioCode
+    └───platformIO 
+        └───Projects
+            └───TWIPe
+                └───bash
+                └───doc
+                │   └───pcb
+                        └───SB7D
+                │   └───chassis
+                └───hw
+                    └───pcb
+                        └───SB7D
+                    └───chassis
+                └───img
+                └───include
+                └───lib
+                └───src
+                └───test
+```
 
 ## Getting Started
 
