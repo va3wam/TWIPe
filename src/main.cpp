@@ -12,6 +12,7 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-01-18 DE: - make gpio changes for h/w mod to avoid ESP32 LED connection permanent
  * 2021-01-16 DE: - trivial change (only this line) to test git merge script
  * 2021-01-15 DE: - fix StringToUpper(), changing it from void to returning a string
  *                - change fault count display separator to * so it's not confused with a 1
@@ -204,7 +205,6 @@
 // from https://github.com/ThingPulse/esp8266-oled-ssd1306
 #include <MPU6050-fix2764.h>                        // for MPU6050
 // require the version that has fix for misplaced parenthesis at line 2764
-// #define avoidEspLed true                            // tell huzzah32 we've modified DRV1 fault pin to go to cpu pin 5, gpio 26
 #include <huzzah32_pins.h>                          // Defines our usage of the GPIO pins for Adafruit Huzzah32 dev board
 // our own creation
 #include <i2c_metadata.h>                           // Defines all I2C related info including device addresses, bus pins and bus speeds
@@ -256,7 +256,6 @@
 
 #define MQTTQos 0                     // use Quality of Service level 1 or 0? (0 has less overhead)
 bool OLED_enable = true;              // allow disabling OLED for performance troubleshooting
-
 
 // struct robotAttributes attribute definition =========================================
 typedef struct
@@ -1903,6 +1902,7 @@ void setupIMU()
       {
          Serial.println("initial memory load failed");
       } //if
+
       else if (devStatus == 2)
       {
          Serial.println("DMP configuration updates failed");

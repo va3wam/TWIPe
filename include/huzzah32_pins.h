@@ -9,6 +9,7 @@
  * @ref https://semver.org/
  * Version YYYY-MM-DD Description
  * ------- ---------- ----------------------------------------------------------------------------------------------------------------
+ * 0.0.2   2021-01-18 DE: make temporary change to DRV1 fault line's CPU pin permanent
  * 0.0.1   2020-04-21 Include file created. Comments about the pins in markdown table format  
  *************************************************************************************************************************************
  * # Table of Huzzah32 Pin Assignments for TWIPe Robot
@@ -50,11 +51,7 @@
 #define gp_DRV1_ENA 16                // Enable for DRV1 - controls 12V consumption, maybe
 #define gp_DRV1_STEP 18               // CPU output for STEP command 
 #define gp_DRV1_DIR 19                // CPU output for DIRection control
-#ifdef avoidEspLed                    // if DRV1 was rewired so fault uses cpu pin 5, gpio 26
-#define gp_DRV1_FAULT 26              // rewired so DRV1 fault line goes to cpu pin 5, gpio 26
-#else
-#define gp_DRV1_FAULT 13              // CPU input for fault indicator. Conflicts with onboard red LED?
-#endif
+#define gp_DRV1_FAULT 26              // rewired so DRV1 fault line goes to cpu pin 5, gpio 26 , avoiding LED on gpio13
 
 #define gp_DRV2_ENA 27                // Enable for DRV1 - controls 12V consumption, maybe
 #define gp_DRV2_STEP 33               // CPU output for STEP command 
