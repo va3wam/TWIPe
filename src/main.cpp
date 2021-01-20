@@ -12,6 +12,7 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-01-19 DE: - switch to QOS = 1 after seeing telemetry anomalies
  * 2021-01-18 DE: - make gpio changes for h/w mod to avoid ESP32 LED connection permanent
  * 2021-01-16 DE: - trivial change (only this line) to test git merge script
  * 2021-01-15 DE: - fix StringToUpper(), changing it from void to returning a string
@@ -203,6 +204,8 @@
 // Comes with Platform.io
 #include <SSD1306.h>                                // For OLED 
 // from https://github.com/ThingPulse/esp8266-oled-ssd1306
+   // #include <Fonts/FreeMono12pt7b.h>         // http://oleddisplay.squix.ch/#/home  (monospaced, lato, sanserif)
+   // #include <Fonts/FreeMono9pt7b.h>          // saw somewhere that 9 and 12 point fonts are recommended for .96 inch
 #include <MPU6050-fix2764.h>                        // for MPU6050
 // require the version that has fix for misplaced parenthesis at line 2764
 #include <huzzah32_pins.h>                          // Defines our usage of the GPIO pins for Adafruit Huzzah32 dev board
@@ -212,7 +215,7 @@
 #include <known_networks.h>                         // Defines Access points and passwords that the robot can scan for and connect to
 // our own creation
 #include <AsyncMqttClient.h> // for Message Queuing Telemetry Support
-// from https://github.com/marvinroger/async-mqtt-client
+// from https://github.com/marvinroger/async-mqtt-clientFupOLED()
 
 // FreeRTOS libraries  
 #include "freertos/FreeRTOS.h"      // Required for threads that control wifi and mqtt connections
@@ -254,7 +257,7 @@
 #define ARDUINO_RUNNING_CORE 1 // Arduino is running on the second core
 #endif
 
-#define MQTTQos 0                     // use Quality of Service level 1 or 0? (0 has less overhead)
+#define MQTTQos 1                     // use Quality of Service level 1 or 0? (0 has less overhead)
 bool OLED_enable = true;              // allow disabling OLED for performance troubleshooting
 
 // struct robotAttributes attribute definition =========================================
@@ -2019,25 +2022,29 @@ void updateLED()
    digitalWrite(gp_SWC_LED, blinkState);
    goLED = millis() + tmrLED; // Reset LED flashing counter
    
-   // once a second, update left OLED with CPU utilization information
-   if(blinkState == true)          // it alternates - this is a half second timer
-   {
-      // TODO rewite OLED display routines, using low frequency display, independent of LED
-      rightOLED.clear();
-      String tmp = String("IM:") +String(cu$IMU) +String(" Wi:") +String(cu$wifi) +String(" OL:") +String(cu$OLED)+ String("|");
-      rightOLED.drawString(0,0,String(tmp));
+   #ifdef displayCpuUsage
+      // once a second, update left OLED with CPU utilization information
+      if(blinkState == true)          // it alternates - this is a half second timer
+      {
+         // TODO rewite OLED display routines, using low frequency display, independent of LED
+         rightOLED.clear();
+         // String tmp = String("IM:") +String(cu$IMU) +String(" Wi:") +String(cu$wifi) +String(" OL:") +String(cu$OLED)+ String("|");
+         String tmp = String("IM:") +String(cu$IMU) +String(" Wi:") +String(cu$wifi) +String(" OL:") +String(cu$OLED)+ String("|");
+         rightOLED.drawString(0,0,String(tmp));
 
-      tmp = String("LD:") +String(cu$LED) +String(" MD:") +String(cu$metaData) +String(" OS:") +String(cu$OS)+ String("|");
-      rightOLED.drawString(0,16,String(tmp));
+         tmp = String("LD:") +String(cu$LED) +String(" MD:") +String(cu$metaData) +String(" OS:") +String(cu$OS)+ String("|");
+         rightOLED.drawString(0,16,String(tmp));
 
-      tmp = String("loop:") +String(cu$loop) +String(" othr:") +String(cu$other) + String("|");
-      rightOLED.drawString(0,32,String(tmp));
+         tmp = String("loop:") +String(cu$loop) +String(" othr:") +String(cu$other) + String("|");
+         rightOLED.drawString(0,32,String(tmp));
 
-      tmp = String("Mq: ") + String(cu$mqtt) +String("*") + String(health.leftDRVfault) +String("*")+String(health.rightDRVfault) +String("*");
-      rightOLED.drawString(0,48,String(tmp));
+         tmp = String("Mq: ") + String(cu$mqtt) +String("*") + String(health.leftDRVfault) +String("*")+String(health.rightDRVfault) +String("*");
+         rightOLED.drawString(0,48,String(tmp));
 
-      rightOLED.display();
-   }
+         rightOLED.display();
+
+      }
+   #endif
 } // updateLED()
 
 /**
@@ -2402,8 +2409,8 @@ void loop()
          else 
          {   
             if (millis() >= goLED)
-            {  updateLED();                    // Update the front amber LED
-               updateLeftOLEDNetInfo();        // and the network info in left OLED
+            {  updateLED();                                          // Update the front amber LED
+               if(millis() < 10000) { updateLeftOLEDNetInfo(); } ;    // and the network info in left OLED
                cu_LED += micros() - cu_loopStart;   // add time to LED routine counter
             }            
             else 
