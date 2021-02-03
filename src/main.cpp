@@ -12,6 +12,8 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-02-03 DE: - update default params for Andrew and Doug's bots in cfgByMac
+ * 2021-01-01 DE: - re-enable display of DRV fault counts on right LED
  * 2021-01-22 DE: - make the displayable balance.ISum be the average, not the total Isum (no change to algorithm)
  *                - if selectiveISum is defined, add the I part to the total PID only if it pushes bot towards vertical, not away from it
  *                - fix bug calculating balance.pidISum at beginning: calculate and use numToSum rather than balance.pidICount
@@ -1963,12 +1965,12 @@ void cfgByMAC()
       balance.fastTicks=300; //300
       balance.directionMod = -1;
       balance.smoother=0;
-      balance.pidPGain=6;
-      balance.pidIGain=40;
-      balance.pidICount=40;
+      balance.pidPGain=5;
+      balance.pidIGain=5;
+      balance.pidICount=35;
       balance.pidDGain=0;
       balance.activeAngle=1;
-      balance.targetAngle=3;
+      balance.targetAngle=.75;
       balance.tmrIMU=12;
       MQTT_BROKER_IP = "192.168.2.21";
    }                                        //if
@@ -1988,12 +1990,12 @@ void cfgByMAC()
       balance.fastTicks=300;
       balance.directionMod = -1;  // changed when started using same Makeblock motors as Andrew
       balance.smoother=0;
-      balance.pidPGain=6;
-      balance.pidIGain=40;
-      balance.pidICount=40;
+      balance.pidPGain=5;
+      balance.pidIGain=5;
+      balance.pidICount=35;
       balance.pidDGain=0;
       balance.activeAngle=1;
-      balance.targetAngle=.5;
+      balance.targetAngle=.25;
       balance.tmrIMU=12;
       MQTT_BROKER_IP = "192.168.0.99";
    } //else if
@@ -2043,8 +2045,8 @@ void updateLED()
    
 
       // once a second, update left OLED with CPU utilization information
-//      if(blinkState == true)          // it alternates - this is a half second timer
-      if(1 == 0)          // it alternates - this is a half second timer
+      if(blinkState == true)          // it alternates - this is a half second timer
+//      if(1 == 0)          // it alternates - this is a half second timer
       {
          // TODO rewite OLED display routines, using low frequency display, independent of LED
          rightOLED.clear();
