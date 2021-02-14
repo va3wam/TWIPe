@@ -1,4 +1,7 @@
 # TWIPe
+
+[![LICENSE](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://raw.githubusercontent.com/mmistakes/minimal-mistakes/master/LICENSE)
+
 This is the repository for a Two Wheeled Inverted Pendulum robot called Twipe. Be advised that not only is there Aduino code written to run on an Adafruit Huzzah32 development board but also Eagle PCB design files and Fusion360 CAD files. 
 
 ## Local Directory Structure
