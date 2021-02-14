@@ -12,6 +12,9 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-02-13 AM: - updated cfgByMAC() for Andrew's robot with new calibration numbers, new default balance numbers, and turn 
+ *                  on MQTT messaging. Direct the output to the broker by default. Also removed duplicate timestamp on health 
+ *                  telemetry messages.
  * 2021-01-19 DE: - switch to QOS = 1 after seeing telemetry anomalies
  * 2021-01-18 DE: - make gpio changes for h/w mod to avoid ESP32 LED connection permanent
  * 2021-01-16 DE: - trivial change (only this line) to test git merge script
@@ -1183,7 +1186,8 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
   else if(UC_command.substring(0,12) == "GETHTHTEL")
   {  AMDP_PRINTLN("<onMqttMessage> Received gethealthtel remote request for health telemetry values");
      int gethealthtelMillis = millis();
-     publishMQTT(MQTTTop_hthTel,String(gethealthtelMillis) +","+String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
+//     publishMQTT(MQTTTop_hthTel,String(gethealthtelMillis) +","+String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
+     publishMQTT(MQTTTop_hthTel,String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
      +","+ String(health.dmpFifoDataMissingCnt) +","+ String(health.wifiDropCnt) 
      +","+ String(health.mqttDropCnt) +","+ String(health.unknownCmdCnt) +","+String(health.leftDRVfault)  
      +","+ String(health.rightDRVfault) +","+ String(health.unknownSetvarCnt));
@@ -1931,12 +1935,12 @@ void cfgByMAC()
    if (myMACaddress == "B4E62D9E9061") // This is Andrew's bot
    {
       AMDP_PRINTLN("<cfgByMAC> Setting up MAC B4E62D9E9061 configuration - Andrew");
-      attribute.XGyroOffset = -4691;
-      attribute.YGyroOffset = 1935;
-      attribute.ZGyroOffset = 1873;
-      attribute.XAccelOffset = 16383;
-      attribute.YAccelOffset = 0;
-      attribute.ZAccelOffset = 0;
+      attribute.XGyroOffset = 47;
+      attribute.YGyroOffset = -8;
+      attribute.ZGyroOffset = -3;
+      attribute.XAccelOffset = -4433;
+      attribute.YAccelOffset = 1947;
+      attribute.ZAccelOffset = 1971;
       attribute.heightCOM = 5;
       attribute.wheelDiameter = 3.937008; // 100mm in inches
       attribute.stepsPerRev = 200;
@@ -1944,13 +1948,14 @@ void cfgByMAC()
       balance.fastTicks=300; //300
       balance.directionMod = -1;
       balance.smoother=0;
-      balance.pidPGain=6;
-      balance.pidIGain=40;
-      balance.pidICount=40;
+      balance.pidPGain=5;
+      balance.pidIGain=5;
+      balance.pidICount=17;
       balance.pidDGain=0;
       balance.activeAngle=1;
-      balance.targetAngle=3;
+      balance.targetAngle=0;
       balance.tmrIMU=12;
+      balTelMsg.destination=TARGET_MQTT;
       MQTT_BROKER_IP = "192.168.2.21";
    }                                        //if
    else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot

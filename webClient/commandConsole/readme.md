@@ -1,0 +1,2 @@
+# Command Console
+This is a web browser based command console for Twipe robot. It uses HTML, CSS and JavaScript as well as the paho-mqtt javascript object hosted on Cloudflare inorder to send MQTT packets down a websocket tunnel to a websocket enabled MQTT server.
