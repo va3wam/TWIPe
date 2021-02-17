@@ -12,6 +12,7 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-02-14 AM: - Renamed updateMetaData() to getHealthTelemetry(). Got rid of duplicate time stamp of get command responses.
  * 2021-02-13 AM: - updated cfgByMAC() for Andrew's robot with new calibration numbers, new default balance numbers, and turn 
  *                  on MQTT messaging. Direct the output to the broker by default. Also removed duplicate timestamp on health 
  *                  telemetry messages.
@@ -115,9 +116,9 @@
  *                     -add execution time of left and right OLED updates to telemetry. Yup - they're huge.
  *                     -move writing of netinfo to left eye into setup(), since info is static, and doesn't need refreshes
  *                       -subsequently added it when entering bs_awake, to get all values to display
- *                     -add execution time of updateMetadata() to telemetry
+ *                     -add execution time of getHealthTelemetry() to telemetry
  *                     -remove display of MotorInt and PID from right eye, to see what execution time reduction we get
- *                     -add execution time for updateMetadata() to telemetry
+ *                     -add execution time for getHealthTelemetry() to telemetry
  *                     -play with adjusting pid_p_gain & watching telemetry
  *                     -removed serial I/O from onMQTTpublish(), which runs at a high frequency
  *                     -add pid_i_gain and pid_d_gain parameters for controlling PID algorithm
@@ -448,7 +449,7 @@ unsigned long tm_allReadIMU;      // telemetry value: how long the readIMU execu
 unsigned long tm_OldbalByAng;     // telemetry value: how long the PREVIOUS balanceByAngle took
 unsigned long tm_ROLEDtime;       // telemetry measure: time spent in right OLED update
 unsigned long tm_LOLEDtime;       // telemetry measure: time spent in left OLED update 
-unsigned long tm_uMDtime;         // telemetry measure: time spent in updateMetadata()
+unsigned long tm_uMDtime;         // telemetry measure: time spent in getHealthTelemetry()
 int tm_MQpubCnt = 0;              // telemetry measure: count of onMQTTpublish() executions
 
 unsigned long runFlagWord;        // telemetry word with bit coded flags indicating if a routine has run since last telemetry
@@ -1101,6 +1102,58 @@ void publishParams()                  // publish the control parameters to MQTT
    +","+ String(balance.targetAngle) +","+ String(balance.activeAngle)+","+ String(MQTTQos));
 }
 
+/**`
+ * @brief Send updated metadata about the running of the code.
+ * # Metadata
+ * There are a number of data points that the TWIPe code tracks in order to assess how the robot's logic is performing. These data 
+ * points can be used to pinpoint the cause of perfomance issues as well as play a key role in debugging. Metadata is always being 
+ * issued from the getHealthTelemetry() function. When the metaDataON command is received all metadata is directed to the MQTT 
+ * broker. When the command metaDataOFF is received all metadata is directed to the serial port. NOte that all the the items in the 
+ * table below are found in the payload of the MQTT message. The payload starts with a time stamp in millis() and then is followed 
+ * by each of the items in the table below. Each item is separated by a comma. 
+ * ## Table of metadata tracked 
+ * | Item                     | Details                                                                                               |
+ * |:-------------------------|:------------------------------------------------------------------------------------------------------|
+ * | WiFi connection          | Number of times a wifi connection had to be established |
+ * | WiFi drop                | Number of times the wifi connection dropped |
+ * | MQTT connection          | Number of times an MQTT connection had to be established |
+ * | MQTT drop                | Number of times an MQTT connection dropped     
+ * | MPU6050 DMP read success | Successful attempts to read from the MPU6050 DMP FIFO buffer  |
+ * | MPU6050 DMP read fails   | Failed attempts to read from the MPU6050 DMP FIFO buffer  |
+ * | Unknown command          | Number of unrecognized commands have been received. |
+ * | Left DRV8825 fault       | Number of fault signals sent by the left DVR8825 stepper motor driver |
+ * | Right DRV8825 fault      | Number of fault signals sent by the right DVR8825 stepper motor driver |
+=================================================================================================== */
+void getHealthTelemetry()
+{
+   runbit(17) ;
+   telMilli5 = millis();             // timestamp to get execution time for telemetry
+   if (healthMsg.active) // If configured to write metadata
+   {
+      String tmp = String(health.wifiConAttemptsCnt)
+      + "," + String(health.wifiDropCnt)
+      + "," + String(health.mqttConAttemptsCnt)
+      + "," + String(health.mqttDropCnt)
+      + "," + String(health.dmpFifoDataPresentCnt)
+      + "," + String(health.dmpFifoDataMissingCnt)
+      + "," + String(health.unknownCmdCnt)
+      + "," + String(health.leftDRVfault)
+      + "," + String(health.rightDRVfault);
+
+      if (healthMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
+      {
+         AMDP_PRINT("<updateMetaData> ");
+         AMDP_PRINTLN(tmp);
+      }    //if
+      else // Otherwise assume we are to send the data to the MQTT broker
+      {
+         publishMQTT(MQTTTop_hthTel, tmp);
+      }                                  //else
+   }                                    //if
+   goMETADATA = millis() + tmrMETADATA; // Reset SERIAL update target time
+   tm_uMDtime = millis() - telMilli5;   // telemetry measure: time spent in getHealthTelemetry()
+} // getHealthTelemetry()
+
 /**
  * @brief Handle incoming messages from MQTT broker for topics subscribed to
  * @param topic Which topic this message if about
@@ -1166,12 +1219,10 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
       setControlParameter(UC_command);
    } //if... setvar
 
-// TODO need to review the MQTT topics used below. "controlParameters" probably inappropriate, 
-//      but other definitions have a different structure
    else if(UC_command.substring(0,9) == "GETBALVAR")
    { AMDP_PRINTLN("<onMqttMessage> Received getbalvars remote request for modifyable balance control variables");
-     int getbalvarMillis = millis();    // capture time that command was received
-     publishMQTT(MQTTTop_balCtl,String(getbalvarMillis) +","+String(balance.pidPGain) +","+ String(balance.pidIGain) 
+//     int getbalvarMillis = millis();    // capture time that command was received
+     publishMQTT(MQTTTop_balCtl,String(balance.pidPGain) +","+ String(balance.pidIGain) 
      +","+ String(balance.pidICount) +","+ String(balance.pidDGain) 
      +","+ String(balance.slowTicks) +","+ String(balance.fastTicks) +","+String(balance.smoother)  
      +","+ String(balance.targetAngle) +","+ String(balance.activeAngle)+","+ String(balance.tmrIMU)  );
@@ -1179,27 +1230,19 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 
    else if(UC_command.substring(0,12) == "GETHTHVAR")
    { AMDP_PRINTLN("<onMqttMessage> Received gethealthvars remote request for modifyable health control variables");
-      int gethealthvarMillis = millis();  // capture time that command was received
-      publishMQTT(MQTTTop_hthCtl,String(gethealthvarMillis) +","+String("no health control variables currently implemented"));
+//      int gethealthvarMillis = millis();  // capture time that command was received
+      publishMQTT(MQTTTop_hthCtl,String("no health control variables currently implemented"));
    } // if... gethealthvar
 
   else if(UC_command.substring(0,12) == "GETHTHTEL")
   {  AMDP_PRINTLN("<onMqttMessage> Received gethealthtel remote request for health telemetry values");
-     int gethealthtelMillis = millis();
+//     int gethealthtelMillis = millis();
 //     publishMQTT(MQTTTop_hthTel,String(gethealthtelMillis) +","+String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
-     publishMQTT(MQTTTop_hthTel,String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
-     +","+ String(health.dmpFifoDataMissingCnt) +","+ String(health.wifiDropCnt) 
-     +","+ String(health.mqttDropCnt) +","+ String(health.unknownCmdCnt) +","+String(health.leftDRVfault)  
-     +","+ String(health.rightDRVfault) +","+ String(health.unknownSetvarCnt));
-/*
-  //TODO Put datapoint below to use
-  long riseTimeMax = 0;                     // Most microseconds it took for the signal rise event to happen
-  long riseTimeMin = 0;                     // Least microseconds it took for the signal rise event to happen
-  long fallTimeMax = 0;                     // Most microseconds it took for the signal fall event to happen
-  long fallTimeMin = 0;                     // Least microseconds it took for the signal fall event to happen
-  int delayTimeMax = 0;                     // Most microseconds it took for the delay time event to happen
-  int delayTimeMin = 0;                     // Least microseconds it took for the delay time event to happen
-*/
+//     publishMQTT(MQTTTop_hthTel,String(health.wifiConAttemptsCnt) +","+ String(health.mqttConAttemptsCnt) 
+//     +","+ String(health.dmpFifoDataMissingCnt) +","+ String(health.wifiDropCnt) 
+//     +","+ String(health.mqttDropCnt) +","+ String(health.unknownCmdCnt) +","+String(health.leftDRVfault)  
+//     +","+ String(health.rightDRVfault) +","+ String(health.unknownSetvarCnt));
+      getHealthTelemetry();
    } // if... gethealthtel
 
    else if(UC_command.substring(0,5) == "MOTOR")
@@ -1635,7 +1678,7 @@ void balanceByAngle()
    16 flagsinhex      bit encoded indication of which routines have executed since last readIMU cycle
    17 tm_ROLEDtime    time spent in the routine that updates the right OLED since last readIMU cycle
    18 tm_MQpubCnt     the number of times the MQTTpublish reoutine was executed since last readIMU cycle
-   19 tm_uMDtime      telemetry measure: time spent in updateMetadata() since last readIMU cycle
+   19 tm_uMDtime      telemetry measure: time spent in getHealthTelemetry() since last readIMU cycle
 
    */
 
@@ -1666,58 +1709,6 @@ void balanceByAngle()
       } //else
    }   //if
 } // balanceByAngle
-
-/**`
- * @brief Send updated metadata about the running of the code.
- * # Metadata
- * There are a number of data points that the TWIPe code tracks in order to assess how the robot's logic is performing. These data 
- * points can be used to pinpoint the cause of perfomance issues as well as play a key role in debugging. Metadata is always being 
- * issued from the updateMetaData() function. When the metaDataON command is received all metadata is directed to the MQTT 
- * broker. When the command metaDataOFF is received all metadata is directed to the serial port. NOte that all the the items in the 
- * table below are found in the payload of the MQTT message. The payload starts with a time stamp in millis() and then is followed 
- * by each of the items in the table below. Each item is separated by a comma. 
- * ## Table of metadata tracked 
- * | Item                     | Details                                                                                               |
- * |:-------------------------|:------------------------------------------------------------------------------------------------------|
- * | WiFi connection          | Number of times a wifi connection had to be established |
- * | WiFi drop                | Number of times the wifi connection dropped |
- * | MQTT connection          | Number of times an MQTT connection had to be established |
- * | MQTT drop                | Number of times an MQTT connection dropped     
- * | MPU6050 DMP read success | Successful attempts to read from the MPU6050 DMP FIFO buffer  |
- * | MPU6050 DMP read fails   | Failed attempts to read from the MPU6050 DMP FIFO buffer  |
- * | Unknown command          | Number of unrecognized commands have been received. |
- * | Left DRV8825 fault       | Number of fault signals sent by the left DVR8825 stepper motor driver |
- * | Right DRV8825 fault      | Number of fault signals sent by the right DVR8825 stepper motor driver |
-=================================================================================================== */
-void updateMetaData()
-{
-   runbit(17) ;
-   telMilli5 = millis();             // timestamp to get execution time for telemetry
-   if (healthMsg.active) // If configured to write metadata
-   {
-      String tmp = String(health.wifiConAttemptsCnt)
-      + "," + String(health.wifiDropCnt)
-      + "," + String(health.mqttConAttemptsCnt)
-      + "," + String(health.mqttDropCnt)
-      + "," + String(health.dmpFifoDataPresentCnt)
-      + "," + String(health.dmpFifoDataMissingCnt)
-      + "," + String(health.unknownCmdCnt)
-      + "," + String(health.leftDRVfault)
-      + "," + String(health.rightDRVfault);
-
-      if (healthMsg.destination == TARGET_CONSOLE) // If we are to send this data to the console
-      {
-         AMDP_PRINT("<updateMetaData> ");
-         AMDP_PRINTLN(tmp);
-      }    //if
-      else // Otherwise assume we are to send the data to the MQTT broker
-      {
-         publishMQTT(MQTTTop_hthTel, tmp);
-      }                                  //else
-   }                                    //if
-   goMETADATA = millis() + tmrMETADATA; // Reset SERIAL update target time
-   tm_uMDtime = millis() - telMilli5;   // telemetry measure: time spent in updateMetadata()
-} // updateMetaData()
 
 /**
  * @brief Update Left OLED display with network info: MAC, IP, AccessPoint, Hostname
@@ -1955,6 +1946,7 @@ void cfgByMAC()
       balance.activeAngle=1;
       balance.targetAngle=0;
       balance.tmrIMU=12;
+      healthMsg.active = true; 
       balTelMsg.destination=TARGET_MQTT;
       MQTT_BROKER_IP = "192.168.2.21";
    }                                        //if
@@ -2421,7 +2413,7 @@ void loop()
             else 
             {  if (millis() >= goMETADATA)
                {
-                  updateMetaData();           // Send data to serial terminal
+                  getHealthTelemetry();           // Send data to serial terminal
                   cu_metaData += micros() - cu_loopStart;   // add time to mettadata routine counter
                }     
                else
