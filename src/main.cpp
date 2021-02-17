@@ -1962,17 +1962,10 @@ void cfgByMAC()
       balance.smoother=0;
       balance.pidPGain=5;
       balance.pidIGain=5;
-<<<<<<< HEAD
       balance.pidICount=17;
       balance.pidDGain=0;
       balance.activeAngle=1;
       balance.targetAngle=0;
-=======
-      balance.pidICount=35;
-      balance.pidDGain=0;
-      balance.activeAngle=1;
-      balance.targetAngle=.75;
->>>>>>> master
       balance.tmrIMU=12;
       healthMsg.active = true; 
       balTelMsg.destination=TARGET_MQTT;
