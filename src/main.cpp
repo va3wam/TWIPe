@@ -16,6 +16,11 @@
  * 2021-02-13 AM: - updated cfgByMAC() for Andrew's robot with new calibration numbers, new default balance numbers, and turn 
  *                  on MQTT messaging. Direct the output to the broker by default. Also removed duplicate timestamp on health 
  *                  telemetry messages.
+ * 2021-02-03 DE: - update default params for Andrew and Doug's bots in cfgByMac
+ * 2021-01-01 DE: - re-enable display of DRV fault counts on right LED
+ * 2021-01-22 DE: - make the displayable balance.ISum be the average, not the total Isum (no change to algorithm)
+ *                - if selectiveISum is defined, add the I part to the total PID only if it pushes bot towards vertical, not away from it
+ *                - fix bug calculating balance.pidISum at beginning: calculate and use numToSum rather than balance.pidICount
  * 2021-01-19 DE: - switch to QOS = 1 after seeing telemetry anomalies
  * 2021-01-18 DE: - make gpio changes for h/w mod to avoid ESP32 LED connection permanent
  * 2021-01-16 DE: - trivial change (only this line) to test git merge script
@@ -263,6 +268,7 @@
 
 #define MQTTQos 1                     // use Quality of Service level 1 or 0? (0 has less overhead)
 bool OLED_enable = true;              // allow disabling OLED for performance troubleshooting
+#define selectiveISum true            // only use the I in PID if it pushes us towrds vertical, not away from it
 
 // struct robotAttributes attribute definition =========================================
 typedef struct
@@ -575,6 +581,7 @@ typedef struct
    float smoother = 0 ;         // smooth changes in speed by using new = old + smoother * (new - old). smoother=0 > disable smoothing 
    float pid;                   // overall value for "Proportional Integral Derivative (PID)" feedback algorithm
    float pidRaw;                // copy of PID before range checking, for telemetry
+   int dataCount = 0;           // number of balance data telemetry messages we've sent
    float pidPGain = 150;        // multiplier for the P part of PID
    float pidIGain = 0;          // multiplier for the I part of PID
    int  pidICount = 0;          // number of recent errors to include in I part of PID
@@ -1573,15 +1580,28 @@ void balanceByAngle()
       balance.pid = balance.pidPGain * balance.angleErr;       // apply the multiplier for the P in PID, and store in overall PID
 
       // now  calculate, and add on, the I part = sum of recent error values
-      balance.pidISum = 0.;                                      // could be including 0 in I sum, so start with zero sum
+      balance.pidISum = 0.;                                    // could be including 0 in I sum, so start with zero sum
       balance.errHistory[0] = balance.angleErr;                // makes the loop a bit easier if it's all in the array
       if(balance.pidICount > 0)                                // unless we're not summing any I values...
       {
-         for(int t=1; t<=balance.pidICount; t++)                // loop through history for last pidICount error values
-         {   balance.pidISum += balance.errHistory[t-1];                // element 0 is current error, element 1 is previous error....
+         balance.dataCount ++ ;                                // count one more telemmetry message
+         int numToSum = balance.dataCount;                     // at startup, don't have b.pidICount values yet
+         if (numToSum > balance.pidICount)                     // but will eventually
+         {  numToSum = balance.pidICount;                      // max out once you've got enough data
          }
+         for(int t=1; t<=numToSum; t++)                        // loop through history for last pidICount error values
+         {   balance.pidISum += balance.errHistory[t-1];       // element 0 is the current error, element 1 is previous error....
+         }
+         balance.pidISum /= numToSum;                          // turn it into the average I value over the history
       }
-      balance.pid += balance.pidIGain * balance.pidISum/balance.pidICount; // add average of stored I values times gain
+      #ifdef selectiveISum                                     // if we're selectively avoiding counterproductive ISum values
+         if(balance.angleErr * balance.pidISum > 0 )           // if and only if the ISum component is moving us towards vertical
+         {   //                                                // ie the current angle and the ISum have the same sign
+            balance.pid += balance.pidIGain * balance.pidISum; // add average of stored I values times gain
+         }                                                     // but don't make it worse and push bot AWAY from vertical
+      #else
+         balance.pid += balance.pidIGain * balance.pidISum; // unconditionally add average of stored I values times gain
+      #endif
 
       for(int t = balance.pidICount; t >= 1; t-- )
       {   balance.errHistory[t] = balance.errHistory[t-1];    //shuffle remembered values so we have most recent bunch
@@ -1890,6 +1910,7 @@ void setupIMU()
       AMDP_PRINT("<setupIMU> packetSize = ");
       AMDP_PRINTLN(packetSize);
       balance.method = bm_initialMethod;      // are we balancing by catchup distance, or angle deviation?
+      balance.dataCount = 0;                 // balance data telemetry message counter
    }    //if
    else // If initialization failed
    {
@@ -1941,10 +1962,17 @@ void cfgByMAC()
       balance.smoother=0;
       balance.pidPGain=5;
       balance.pidIGain=5;
+<<<<<<< HEAD
       balance.pidICount=17;
       balance.pidDGain=0;
       balance.activeAngle=1;
       balance.targetAngle=0;
+=======
+      balance.pidICount=35;
+      balance.pidDGain=0;
+      balance.activeAngle=1;
+      balance.targetAngle=.75;
+>>>>>>> master
       balance.tmrIMU=12;
       healthMsg.active = true; 
       balTelMsg.destination=TARGET_MQTT;
@@ -1966,12 +1994,12 @@ void cfgByMAC()
       balance.fastTicks=300;
       balance.directionMod = -1;  // changed when started using same Makeblock motors as Andrew
       balance.smoother=0;
-      balance.pidPGain=6;
-      balance.pidIGain=40;
-      balance.pidICount=40;
+      balance.pidPGain=5;
+      balance.pidIGain=5;
+      balance.pidICount=35;
       balance.pidDGain=0;
       balance.activeAngle=1;
-      balance.targetAngle=.5;
+      balance.targetAngle=.25;
       balance.tmrIMU=12;
       MQTT_BROKER_IP = "192.168.0.99";
    } //else if
@@ -2019,12 +2047,14 @@ void updateLED()
    digitalWrite(gp_SWC_LED, blinkState);
    goLED = millis() + tmrLED; // Reset LED flashing counter
    
-   #ifdef displayCpuUsage
+
       // once a second, update left OLED with CPU utilization information
       if(blinkState == true)          // it alternates - this is a half second timer
+//      if(1 == 0)          // it alternates - this is a half second timer
       {
          // TODO rewite OLED display routines, using low frequency display, independent of LED
          rightOLED.clear();
+   #ifdef displayCpuUsage
          // String tmp = String("IM:") +String(cu$IMU) +String(" Wi:") +String(cu$wifi) +String(" OL:") +String(cu$OLED)+ String("|");
          String tmp = String("IM:") +String(cu$IMU) +String(" Wi:") +String(cu$wifi) +String(" OL:") +String(cu$OLED)+ String("|");
          rightOLED.drawString(0,0,String(tmp));
@@ -2034,14 +2064,15 @@ void updateLED()
 
          tmp = String("loop:") +String(cu$loop) +String(" othr:") +String(cu$other) + String("|");
          rightOLED.drawString(0,32,String(tmp));
+   #endif
 
-         tmp = String("Mq: ") + String(cu$mqtt) +String("*") + String(health.leftDRVfault) +String("*")+String(health.rightDRVfault) +String("*");
+         String tmp = String("Mq: ") + String(cu$mqtt) +String("*") + String(health.leftDRVfault) +String("*")+String(health.rightDRVfault) +String("*");
          rightOLED.drawString(0,48,String(tmp));
 
          rightOLED.display();
 
       }
-   #endif
+
 } // updateLED()
 
 /**

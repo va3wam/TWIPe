@@ -1,5 +1,8 @@
 # TWIPe
-This is the repository for a Two Wheeled Inverted Pendulum robot called Twipe. Be advised that not only is there Aduino code written to run on an Adafruit Huzzah32 development board but also Eagle PCB design files and Fusion360 CAD files. 
+
+[![LICENSE](https://img.shields.io/badge/license-MIT-lightgrey.svg)](https://raw.githubusercontent.com/mmistakes/minimal-mistakes/master/LICENSE)
+
+This is the repository for a Two Wheeled Inverted Pendulum robot called Twipe. The firmware that runs on the robot can be found here as well as a browser based ccontrol console app for remote control and monitoring of the robot.  
 
 ## Local Directory Structure
 ```
@@ -10,18 +13,15 @@ Documents
             └───TWIPe
                 └───bash
                 └───doc
-                │   └───pcb
-                        └───SB7D
-                │   └───chassis
-                └───hw
-                    └───pcb
-                        └───SB7D
-                    └───chassis
                 └───img
                 └───include
                 └───lib
                 └───src
+                    └───main.cpp (This is the robot firmware)
                 └───test
+                └───webClient
+                    └───commandConsole
+                        └───twipeConsole.html (This is the operator console)
 ```
 
 ## Getting Started
@@ -32,8 +32,9 @@ There is a [VA3WAM wiki page](https://github.com/va3wam/va3wam.github.io/wiki) t
 2. Test the robot's circuit. Code and instructions [here](https://github.com/va3wam/TWIPeTest)
 3. Get the calibration values. Code and instructions [here](https://github.com/va3wam/TWIPeCalibrate)
 4. Load up the TWIPe code (with the updated offset values if you did that step)
-5. Put the robot face down parallel to the ground
+5. Put the robot on its back parallel to the ground
 6. Let it boot up
+7. Stand up the robot and it should balance. If not you will need to do some PID tuning
 
 ### Prerequisites
 
