@@ -1,0 +1,321 @@
+<!DOCTYPE HTML>
+<html>
+   <head>
+      <meta charset="utf-8">
+      <title>Twipe Command Console</title>
+      <link type="text/css" rel="stylesheet" href="style.css">
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.2/mqttws31.min.js" type="text/javascript"></script>
+      <script src="mainApp.js" type="text/javascript"></script>
+   </head>
+   <body onload="updateConnectionStatus('red','Disconnected')">   
+      <div class="wrap">
+         <div class="header">
+            <h1>Twipe Command Console</h1>
+            <div class="tab">
+               <button class="tablinks" onclick="openTab(event, 'Connection')" id="defaultOpen">Connection</button>
+               <button class="tablinks" onclick="openTab(event, 'Configure')">Configure</button>
+               <button class="tablinks" onclick="openTab(event, 'Telemetry')">Balance Analysis</button>
+            </div>
+         </div><!-- .header -->
+         <div id="Connection" class="tabcontent">
+            <div class="instructions">
+               <p>Connect to the MQTT broker via websockets.</p>
+            </div><!--- instructions -->
+            <div class="wrapper">
+               <form id="connection-information-form">
+                  <b>Hostname or IP Address:</b> 
+                  <input id="host" type="text" name="host" value="192.168.2.21"><br>
+                  <b>Port:</b>
+                  <input id="port" type="text" name="port" value="9001"><br>
+                  <b>Topic:</b>
+                  <input id="topic" type="text" name="topic" value="#"><br>
+                  <input type="button" onclick="startConnect()" value="Connect">
+                  <input type="button" onclick="startDisconnect()" value="Disconnect">
+               </form>
+            </div><!--- wrapper -->         
+         </div><!--- connection -->
+         <div id="Configure" class="tabcontent">
+            <div class="instructions">
+               <p>
+                  Configure the Twipe robot. Note that the <i>getBalVar</i> and <i>getHthVar</i> commnds have no button. 
+                  Issue them as a custom command if you want to use them.
+               </p>
+            </div><!--- instructions -->
+            <div class="wrapper">
+               <form id="configuration-form">
+                  <label for="robotID">Robot:</label>
+                  <select id="robotID">
+                     <option value="TwipeB4E62D9E9061" selected="selected">Andrew</option>
+                     <option value="TwipeB4E62D9EA8F9">Doug</option>
+                  </select><br><br>             
+                  <table>
+                     <tr><!--- First row of table -->
+                        <td>
+                           <!--- iGain -->
+                           <label for="iGain">iGain:</label>
+                           <input id="iGain" type="text" name="iGain" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('iGain')" style="float: right;" value="Publish">            
+                        </td>      
+                        <td>
+                           <!--- iCount -->
+                           <label for="iCount">iCount:</label>
+                           <input id="iCount" type="text" name="iCount" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('iCount')" style="float: right;" value="Publish">            
+                        </td>      
+                     </tr>
+                     <tr><!--- Second row of table -->
+                        <td>
+                           <!--- pGain -->
+                           <label for="pGain">pGain:</label>
+                           <input id="pGain" type="text" name="pGain" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('pGain')" style="float: right;" value="Publish">            
+                        </td>      
+                        <td>
+                           <!--- dGain -->
+                           <label for="dGain">dGain:</label>
+                           <input id="dGain" type="text" name="dGain" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('dGain')" style="float: right;" value="Publish">            
+                        </td>      
+                     </tr>
+                     <tr><!--- Third row of table -->
+                        <td>
+                           <!--- slowTicks -->
+                           <label for="slowTicks">slowTicks:</label>
+                           <input id="slowTicks" type="text" name="slowTicks" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('slowTicks')" style="float: right;" value="Publish">            
+                        </td>      
+                        <td>
+                           <!--- fastTicks -->
+                           <label for="fastTicks">fastTicks:</label>
+                           <input id="fastTicks" type="text" name="fastTicks" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('fastTicks')" style="float: right;" value="Publish">            
+                        </td>      
+                     </tr>
+                     <tr><!--- Fourth row of table -->
+                        <td>
+                           <!--- smoother -->
+                           <label for="smoother">smoother:</label>
+                           <input id="smoother" type="text" name="smoother" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('smoother')" style="float: right;" value="Publish">            
+                        </td>      
+                        <td>
+                           <!--- targetAngle -->
+                           <label for="targetAngle">targetAngle:</label>
+                           <input id="targetAngle" type="text" name="targetAngle" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('targetAngle')" style="float: right;" value="Publish">            
+                        </td>      
+                     </tr>                     
+                     <tr><!--- Fifth row of table -->
+                        <td>
+                           <!--- activeAngle -->
+                           <label for="activeAngle">activeAngle:</label>
+                           <input id="activeAngle" type="text" name="activeAngle" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('activeAngle')" style="float: right;" value="Publish">            
+                        </td>      
+                        <td>
+                           <!--- tmrImu -->
+                           <label for="tmrImu">tmrImu:</label>
+                           <input id="tmrImu" type="text" name="tmrImu" style="width: 120px"; value="">
+                           <input type="button" onclick="publish('tmrImu')" style="float: right;" value="Publish">            
+                        </td>      
+                     </tr>                     
+                     <tr><!--- Sixth row of table -->
+                        <td>
+                           <!--- balTel -->
+                           <label>Balance Telemetery:</label><br>
+                           <input type="radio" id="balTel" name="balTel" value="balTelOff">Turn Off<br>
+                           <input type="radio" id="balTel" name="balTel" value="balTelCon">Send to Console<br>
+                           <input type="radio" id="balTel" name="balTel" value="balTelMQTT">Send to MQTT Broker<br> 
+                           <input type="button" onclick="publish('balTel')" style="float: right;" value="Publish">                         
+                        </td>      
+                        <td>
+                           <!--- healthTel -->
+                           <label>Health Telemetery:</label><br>
+                           <input type="radio" id="healthTel" name="healthTel" value="hthMsgOff">Turn Off<br>
+                           <input type="radio" id="healthTel" name="healthTel" value="hthMsgCon">Send to Console<br>
+                           <input type="radio" id="healthTel" name="healthTel" value="hthMsgMQTT">Send to MQTT Broker<br> 
+                           <input type="button" onclick="publish('healthTel')" style="float: right;" value="Publish">                         
+                        </td>      
+                     </tr>                     
+                     <tr><!--- Last row of table -->
+                        <td colspan="2">
+                           <!--- Custom command -->
+                           <label for="cmd">Custom Command:</label>
+                           <input id="cmd" type="text" name="cmd" style="width: 500px"; value="">
+                           <input type="button" onclick="publish('custom')" value="Publish">            
+                        </td>      
+                     </tr>
+                  </table>
+               </form> 
+            </div><!--- wrapper -->         
+         </div><!--- configure -->
+         <div id="Telemetry" class="tabcontent">
+            <div class="instructions">
+               <p>Capture and analyse the robot's balance telemetry.</p>
+            </div><!--- instructions -->
+            <div class="wrapper">
+               <form id="telemetry-form">
+                  <b>Robot:</b><br>
+                  <select id="robotID">
+                     <option value="TwipeB4E62D9E9061" selected="selected">Andrew</option>
+                     <option value="TwipeB4E62D9EA8F9">Doug</option>
+                   </select><br><br>             
+                  <b>Balancing Analysis:</b>
+                  <p>
+                     <table border = "1">
+                        <tr>
+                           <th>Time<br>Stamp</th>
+                           <th>IMU<br>tmr<br>delta</th>
+                           <th>FIFO<br>tmr</th>
+                           <th>DMP<br>get<br>tmr</th>
+                           <th>Read<br>IMU<br>tmr</th>
+                           <th>Old Bal<br>by Ang</th>
+                           <th>balance<br>tilt</th>
+                           <th>balance<br>angle<br>Err</th>
+                           <th>balance<br>pid<br>Raw</th>
+                           <th>balance<br>pid</th>
+                           <th>balance<br>pid<br>ISum</th>
+                           <th>balance<br>pid<br>DSlope</th>
+                           <th>balance<br>motor<br>Ticks</th>
+                           <th>flags</th>
+                           <th>ROLED<br>time</th>
+                           <th>MQ<br>pub<br>Cnt</th>
+                           <th>uMD<br>time</th> 
+                        </tr>
+                        <tr>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                           <td>aaa</td>
+                        </tr>
+                        <tr>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                           <td>bbb</td>
+                        </tr>
+                     </table>         
+                  </p>
+                  <p>
+                     <canvas id="myCanvas" width="200" height="200" style="border:1px solid #000000;"></canvas>
+                  </p>
+               </form> 
+            </div><!-- wrapper -->         
+            <script src="defaultOpen.js" type="text/javascript"></script>
+         </div><!--- telemetry -->         
+         <div class="footer">
+            <div id="columns-container">
+               <div class="column column-a">
+                  <span>
+                     <label for="connectionStatus">MQTT Broker Connection Status:</label> 
+                     <input type="text" id="connectionStatus" name="connectionStatus" style="width: 120px; height: 20px; border: 2px solid grey;" readonly>
+                  </span>
+                  <br>
+                  Session Log:
+                  <div id="messages"></div>
+               </div>
+               <div class="column column-b">
+                  <div id="health">
+                     <form>
+                        <table class="center">
+                           <caption>Health Monitoring</caption>
+                           <tr><!--- First row of table -->
+                              <td>
+                                 Wifi Connections Made:
+                              </td>
+                              <td>    
+                                 <input type="text" id="wifiCon" name="wifiCon" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr>   
+                           <tr><!--- Second row of table -->
+                              <td>
+                                 Wifi Connections Droped:
+                              </td>
+                              <td> 
+                                 <input type="text" id="wifiDrop" name="wifiDrop" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr>
+                           <tr><!--- Third row of table -->
+                              <td>
+                                 MQTT Connections Made:
+                              </td>
+                              <td>
+                                 <input type="text" id="mqttCon" name="mqttCon" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr> 
+                           <tr><!--- Fourth row of table -->
+                              <td>
+                                 MQTT Connections Dropped:
+                              </td>
+                              <td>
+                                 <input type="text" id="mqttDrop" name="mqttDrop" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr> 
+                           <tr><!--- Fifth row of table -->
+                              <td>
+                                 DMP Data Missing:
+                              </td>
+                              <td>
+                                 <input type="text" id="dmpMissing" name="dmpMissing" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr> 
+                           <tr><!--- Sixth row of table -->
+                              <td>
+                                 Unknown Commands Recieved:
+                              </td>
+                              <td>
+                                 <input type="text" id="unknownCmd" name="unknownCmd" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr> 
+                           <tr><!--- Seventh row of table -->
+                              <td>
+                                 Left Motor Driver Faults:
+                              </td>
+                              <td>
+                                 <input type="text" id="leftDrvFault" name="leftDrvFault" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr> 
+                           <tr><!--- Eighth row of table -->
+                              <td>
+                                 Right Motor Driver Faults:
+                              </td>
+                              <td>
+                                 <input type="text" id="rightDrvFault" name="rightDrvFault" style="width: 80px; height: 20px; border: 2px solid grey;" readonly>
+                              </td>
+                           </tr> 
+                        </table>
+                      </form>                         
+                     </span>  
+                  </div>    
+               </div>
+            </div><!--- columns-container -->
+         </div><!-- .footer -->
+      </div><!-- .wrap -->
+   </body>
+</html>
