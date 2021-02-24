@@ -12,6 +12,12 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 
+ * 2021-02-24 DE: - create wifiDelay for Wifi startup timeout, and extend it to 3000 msec
+ *                - simulate BalTelMQTT command in cfyByMac()
+ *                - correct calculate of the D part of PID
+ *                - fix the selectiveIsum code - had it backwards
+ *                - redid IMU calibration, for both bots, and updated cfgByMac()
  * 2021-02-03 DE: - update default params for Andrew and Doug's bots in cfgByMac
  * 2021-01-01 DE: - re-enable display of DRV fault counts on right LED
  * 2021-01-22 DE: - make the displayable balance.ISum be the average, not the total Isum (no change to algorithm)
@@ -265,6 +271,7 @@
 #define MQTTQos 1                     // use Quality of Service level 1 or 0? (0 has less overhead)
 bool OLED_enable = true;              // allow disabling OLED for performance troubleshooting
 #define selectiveISum true            // only use the I in PID if it pushes us towrds vertical, not away from it
+#define wifiDelay 3000                // number of milliseconds to wait between WiFi connect attempts
 
 // struct robotAttributes attribute definition =========================================
 typedef struct
@@ -1269,10 +1276,10 @@ void connectToNetwork()
    AMDP_PRINTLN(mySSID);
    WiFi.onEvent(WiFiEvent); // Create a WiFi event handler
    connectToWifi();
-   delay(1000); // give it some time to establish the connection
+   delay(wifiDelay); // give it some time to establish the connection
    while ((WiFi.status() != WL_CONNECTED) && (maxConnectionAttempts > 0))
    {
-      delay(1000); //  wait between reattempts
+      delay(wifiDelay);       //  wait between reattempts
       AMDP_PRINT("<connectToNetwork> Re-attempting connection to Access Point. Connect attempt count down = ");
       AMDP_PRINTLN(maxConnectionAttempts);
       AMDP_PRINT("<connectToNetwork>  current Wifi.status() is: ");
@@ -1281,7 +1288,7 @@ void connectToNetwork()
       if (WFs == 1 || WFs == 4 || WFs == 5 || WFs == 6 || WFs == 0)
       {
          connectToWifi(); // things went bad enough to need another connect attempt
-         delay(1500);     // give it some time to make connection
+         delay(wifiDelay);     // give it some time to make connection
       }                  //if
       maxConnectionAttempts--;
       wifiCurrConAttemptsCnt++;
@@ -1548,27 +1555,28 @@ void balanceByAngle()
          balance.pidISum /= numToSum;                          // turn it into the average I value over the history
       }
       #ifdef selectiveISum                                     // if we're selectively avoiding counterproductive ISum values
-         if(balance.angleErr * balance.pidISum > 0 )           // if and only if the ISum component is moving us towards vertical
-         {   //                                                // ie the current angle and the ISum have the same sign
+         if(balance.angleErr * balance.pidISum < 0 )           // if and only if the ISum component is moving us towards vertical
+         {   //                                                // ie the current angle error and the ISum have different signs
             balance.pid += balance.pidIGain * balance.pidISum; // add average of stored I values times gain
          }                                                     // but don't make it worse and push bot AWAY from vertical
       #else
          balance.pid += balance.pidIGain * balance.pidISum; // unconditionally add average of stored I values times gain
       #endif
 
-      for(int t = balance.pidICount; t >= 1; t-- )
-      {   balance.errHistory[t] = balance.errHistory[t-1];    //shuffle remembered values so we have most recent bunch
-      }
       // now calculate the derivative, which is slope between current and last errors (using errors includes target angle)
       // slope is (delta y) / (delta x), in our case,  (previous error - current error) / (tmrIMU mSec)
       balance.pidDSlope = 0;                  // guess that we won't have enough points to figure slope
       if(balance.pidICount >= 2 )             // but if we do have at least 2 points...
-      {  balance.pidDSlope = ( balance.errHistory[2] - balance.angleErr ) / balance.tmrIMU;  // calculate the slope
+      {  balance.pidDSlope = ( balance.angleErr - balance.errHistory[1] ) / balance.tmrIMU;  // calculate the slope
       }
       // and add that slope, times its gain parameter, to the overall PID
       balance.pid += balance.pidDGain * balance.pidDSlope;
-      balance.pidRaw = balance.pid;                           // save a copy of the pid before range checking for telemetry
 
+      for(int t = balance.pidICount; t >= 1; t-- )            //shuffle remembered values so we have most recent bunch
+      {   balance.errHistory[t] = balance.errHistory[t-1];   
+      }
+
+      balance.pidRaw = balance.pid;                           // save a copy of the pid before range checking for telemetry
       if(balance.pid >  400) balance.pid = 400;               // range limit pid
       if(balance.pid < -400) balance.pid = -400;
       if(abs(balance.pid) < 5) balance.pid = 0;              // create a dead band to stop motors when robot is balanced
@@ -1952,12 +1960,20 @@ void cfgByMAC()
    if (myMACaddress == "B4E62D9E9061") // This is Andrew's bot
    {
       AMDP_PRINTLN("<cfgByMAC> Setting up MAC B4E62D9E9061 configuration - Andrew");
+      attribute.XAccelOffset = -4777;
+      attribute.YAccelOffset = 1977;
+      attribute.ZAccelOffset = 2043;
+      attribute.XGyroOffset = 38;
+      attribute.YGyroOffset = 17;
+      attribute.ZGyroOffset = 3;
+/*                                          // values before recalibrate on 210224
       attribute.XGyroOffset = -4691;
       attribute.YGyroOffset = 1935;
       attribute.ZGyroOffset = 1873;
       attribute.XAccelOffset = 16383;
       attribute.YAccelOffset = 0;
       attribute.ZAccelOffset = 0;
+*/
       attribute.heightCOM = 5;
       attribute.wheelDiameter = 3.937008; // 100mm in inches
       attribute.stepsPerRev = 200;
@@ -1973,16 +1989,25 @@ void cfgByMAC()
       balance.targetAngle=.75;
       balance.tmrIMU=12;
       MQTT_BROKER_IP = "192.168.2.21";
+      balTelMsg.active = true; balTelMsg.destination=TARGET_MQTT;   // simulate BalTelMQTT command
    }                                        //if
    else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
    {
       AMDP_PRINTLN("<cfgByMAC> Setting up MAC B4E62D9EA8F9 configuration - Doug");
-      attribute.XGyroOffset = 60;
-      attribute.YGyroOffset = -10;
-      attribute.ZGyroOffset = -72;
+      attribute.XAccelOffset = 1815;
+      attribute.YAccelOffset = -427;
+      attribute.ZAccelOffset = 1725;
+      attribute.XGyroOffset = 57;
+      attribute.YGyroOffset = -13;
+      attribute.ZGyroOffset = 49;
+/*                                          // values before recalibrate on 210224
       attribute.XAccelOffset = -2070;
       attribute.YAccelOffset = -70;
       attribute.ZAccelOffset = 1641;
+      attribute.XGyroOffset = 60;
+      attribute.YGyroOffset = -10;
+      attribute.ZGyroOffset = -72;
+*/
       attribute.heightCOM = 5;
       attribute.wheelDiameter = 3.937008; // 100mm in inches
       attribute.stepsPerRev = 200;
@@ -1992,13 +2017,14 @@ void cfgByMAC()
       balance.smoother=0;
       balance.pidPGain=5;
       balance.pidIGain=5;
-      balance.pidICount=35;
+      balance.pidICount=17;
       balance.pidDGain=0;
       balance.activeAngle=1;
-      balance.targetAngle=.25;
+      balance.targetAngle=0;
       balance.tmrIMU=12;
       MQTT_BROKER_IP = "192.168.0.99";
-   } //else if
+      balTelMsg.active = true; balTelMsg.destination=TARGET_MQTT;   // simulate BalTelMQTT command
+    } //else if
    else
    {
       Serial.println("<cfgByMAC> MAC not recognized. Setting up generic configuration");
