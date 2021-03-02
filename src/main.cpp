@@ -12,6 +12,7 @@
  * @ref https://semver.org/
  * YYYY-MM-DD Description
  * ---------- ----------------------------------------------------------------------------------------------------------------
+ * 2021-03-02 AM: - Changed Doug's default setting for P, I and D as well as MQTT IP Address.
  * 2021-02-14 AM: - Renamed updateMetaData() to getHealthTelemetry(). Got rid of duplicate time stamp of get command responses.
  * 2021-02-13 AM: - updated cfgByMAC() for Andrew's robot with new calibration numbers, new default balance numbers, and turn 
  *                  on MQTT messaging. Direct the output to the broker by default. Also removed duplicate timestamp on health 
@@ -274,7 +275,7 @@
 
 #define MQTTQos 1                     // use Quality of Service level 1 or 0? (0 has less overhead)
 bool OLED_enable = true;              // allow disabling OLED for performance troubleshooting
-#define selectiveISum true            // only use the I in PID if it pushes us towrds vertical, not away from it
+// #define selectiveISum true            // only use the I in PID if it pushes us towrds vertical, not away from it
 #define wifiDelay 3000                // number of milliseconds to wait between WiFi connect attempts
 
 // struct robotAttributes attribute definition =========================================
@@ -1602,7 +1603,7 @@ void balanceByAngle()
          balance.pidISum /= numToSum;                          // turn it into the average I value over the history
       }
       #ifdef selectiveISum                                     // if we're selectively avoiding counterproductive ISum values
-         if(balance.angleErr * balance.pidISum < 0 )           // if and only if the ISum component is moving us towards vertical
+         if(balance.angleErr * balance.pidISum > 0 )           // if and only if the ISum component is moving us towards vertical
          {   //                                                // ie the current angle error and the ISum have different signs
             balance.pid += balance.pidIGain * balance.pidISum; // add average of stored I values times gain
          }                                                     // but don't make it worse and push bot AWAY from vertical
@@ -1993,7 +1994,7 @@ void cfgByMAC()
       balance.tmrIMU=12;
       healthMsg.active = true; 
       balTelMsg.destination=TARGET_MQTT;
-      MQTT_BROKER_IP = "192.168.2.21";
+      MQTT_BROKER_IP = "192.168.2.21"; // 192.168.0.99
       balTelMsg.active = true; balTelMsg.destination=TARGET_MQTT;   // simulate BalTelMQTT command
    }                                        //if
    else if (myMACaddress == "B4E62D9EA8F9") // This is Doug's bot
@@ -2020,14 +2021,14 @@ void cfgByMAC()
       balance.fastTicks=300;
       balance.directionMod = -1;  // changed when started using same Makeblock motors as Andrew
       balance.smoother=0;
-      balance.pidPGain=5;
-      balance.pidIGain=5;
+      balance.pidPGain=6;
+      balance.pidIGain=8;
       balance.pidICount=17;
-      balance.pidDGain=0;
+      balance.pidDGain=2;
       balance.activeAngle=1;
-      balance.targetAngle=0;
+      balance.targetAngle=-1.25;
       balance.tmrIMU=12;
-      MQTT_BROKER_IP = "192.168.0.99";
+      MQTT_BROKER_IP = "192.168.2.21";
       balTelMsg.active = true; balTelMsg.destination=TARGET_MQTT;   // simulate BalTelMQTT command
     } //else if
    else
